@@ -1,23 +1,26 @@
 #include <iostream>
+#include <sstream>
+#include <fstream>
+#include <limits>
+#include <set>
+#include <string>
+#include <vector>
 
 #include <mpp_utils/create_graded_matrices_from_scc2020.h>
 #include <mpp_utils/Graded_matrix.h>
 #include <scc/Scc.h>
 
-#include <CGAL/Exact_predicates_exact_constructions_kernel.h>
-#include <CGAL/Arr_linear_traits_2.h>
-#include <CGAL/Arrangement_2.h>
+#include <matching_distance.h>
 
-typedef CGAL::Exact_predicates_exact_constructions_kernel Kernel;
-typedef CGAL::Arr_linear_traits_2<Kernel>             Traits_2;
-typedef Traits_2::Point_2                             Point_2;
-typedef Traits_2::Segment_2                           Segment_2;
-typedef Traits_2::Ray_2                               Ray_2;
-typedef Traits_2::Line_2                              Line_2;
-typedef Traits_2::X_monotone_curve_2                  X_monotone_curve_2;
-typedef CGAL::Arrangement_2<Traits_2>                 Arrangement_2;
-typedef Arrangement_2::Vertex_handle                  Vertex_handle;
-typedef Arrangement_2::Halfedge_handle                Halfedge_handle;
+typedef matching::Kernel Kernel;
+typedef matching::Traits_2 Traits_2;
+typedef matching::Point_2 Point_2;
+typedef matching::Ray_2 Ray_2;
+typedef matching::Line_2 Line_2;
+typedef matching::X_monotone_curve_2 X_monotone_curve_2;
+typedef matching::Arrangement_2 Arrangement_2;
+typedef Arrangement_2::Vertex_handle Vertex_handle;
+typedef Arrangement_2::Halfedge_handle Halfedge_handle;
 
 
 namespace barcode_templates {
@@ -94,6 +97,27 @@ namespace barcode_templates {
     CGAL::insert(arr,curves.begin(),curves.end());
   }
 
+  template<typename GrMat>
+  matching::Presentation to_presentation(const GrMat& M) {
+    matching::Presentation P;
+    P.generators.resize(M.num_rows);
+    for (index i = 0; i < M.num_rows; ++i) {
+      P.generators[i].x = matching::FT(M.row_grades[i].at[0]);
+      P.generators[i].y = matching::FT(M.row_grades[i].at[1]);
+    }
+    const index n_rel = M.get_num_cols();
+    P.relations.resize(n_rel);
+    P.columns.resize(n_rel);
+    for (index i = 0; i < n_rel; ++i) {
+      P.relations[i].x = matching::FT(M.grades[i].at[0]);
+      P.relations[i].y = matching::FT(M.grades[i].at[1]);
+      std::vector<index> col;
+      M.get_col(i, col);
+      P.columns[i].assign(col.begin(), col.end());
+    }
+    return P;
+  }
+
 }
 
 
@@ -131,17 +155,33 @@ void split_file_into_scc2020_chunks(std::string input_filename,std::vector<std::
 int main(int argc, char** argv) {
 
   if(argc<2) {
-    std::cerr << "Argument!" << std::endl;
+    std::cerr << "Usage: " << argv[0]
+              << " file.scc [file2.scc] [--no-cgal] [--no-refine]" << std::endl;
     std::exit(1);
   }
 
-  std::string input_filename=argv[1];
-
+  std::vector<std::string> input_files;
   bool build_arrangement=true;
+  bool refine=true;
 
-  if(argc>=3 && std::string(argv[2])=="--no-cgal") {
-      std::cout << "not building arrangment, only join lines" << std::endl;
-      build_arrangement=false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--no-cgal") {
+      std::cout << "not building arrangement, only join lines" << std::endl;
+      build_arrangement = false;
+    } else if (arg == "--no-refine") {
+      refine = false;
+    } else if (arg.size() >= 2 && arg[0] == '-' && arg[1] == '-') {
+      std::cerr << "Unknown flag " << arg << std::endl;
+      std::exit(1);
+    } else {
+      input_files.push_back(arg);
+    }
+  }
+
+  if (input_files.empty()) {
+    std::cerr << "No input file given" << std::endl;
+    std::exit(1);
   }
   
   typedef mpp_utils::Graded_matrix<> GrMat;
@@ -150,12 +190,11 @@ int main(int argc, char** argv) {
   
   typedef GrMat::Coordinate_traits Grade_cast;
   typedef GrMat::Grade Grade;
-  
-  std::vector<std::vector<GrMat> > scc_instances;
 
   std::vector<std::string> scc_strings;
-
-  split_file_into_scc2020_chunks(input_filename, scc_strings);
+  for (const std::string& input_filename : input_files) {
+    split_file_into_scc2020_chunks(input_filename, scc_strings);
+  }
   
   /*
   for(std::string s: scc_strings) {
@@ -167,6 +206,7 @@ int main(int argc, char** argv) {
   
   std::set<Point> gen_joins;
   std::set<Point> rel_joins;
+  std::vector<matching::Presentation> modules;
 
   //scc::verbose=true;
   
@@ -178,51 +218,40 @@ int main(int argc, char** argv) {
       std::vector<GrMat> matrices;
       mpp_utils::create_graded_matrices_from_scc2020(parser,matrices);
       
-      GrMat& M = matrices[0];
-      
-      
-      //std::cout << "Found scc2020 instance" << std::endl;
-      //std::cout << M.get_num_cols() << " " << M.num_rows << std::endl;
+      GrMat& Mat = matrices[0];
       
       std::vector<Grade> gen_grades;
-      barcode_templates::get_grades_of_generators<GrMat>(M,gen_grades);
-      
-      //std::cout << "Found " << gen_grades.size() << " different generator grades" << std::endl;
+      barcode_templates::get_grades_of_generators<GrMat>(Mat,gen_grades);
       
       std::vector<Grade> rel_grades;
-      barcode_templates::get_grades_of_relations<GrMat>(M,rel_grades);
-      
-      //std::cout << "Found " << rel_grades.size() << " different relation grades" << std::endl;
-      
-      
+      barcode_templates::get_grades_of_relations<GrMat>(Mat,rel_grades);
       
       barcode_templates::get_joins(gen_grades,gen_joins);
-      
-      //std::cout << "Found " << gen_joins.size() << " joins for generators (maximal is " << gen_grades.size()*(gen_grades.size()-1)/2 <<")" << std::endl;
-      
       barcode_templates::get_joins(rel_grades,rel_joins);
-      
-      //std::cout << "Found " << rel_joins.size() << " joins for relations (maximal is " << rel_grades.size()*(rel_grades.size()-1)/2 <<")" << std::endl;
-      
+
+      modules.push_back(barcode_templates::to_presentation(Mat));
   }
 
   std::cout << "In total, found " << gen_joins.size() << " generator joins and " << rel_joins.size() << " relation joins " << std::endl;
   std::cout << "Sum: " << gen_joins.size() + rel_joins.size() << std::endl;
+  std::cout << "Loaded " << modules.size() << " presentation(s)" << std::endl;
 
   if(build_arrangement) {
-  
-      Arrangement_2 arr;
-      
-      barcode_templates::build_arrangement<Grade>(arr,gen_joins,rel_joins);
-      
+      if (modules.size() < 2) {
+          std::cerr << "Matching distance needs two presentations (two scc2020 blocks or two files)" << std::endl;
+          std::exit(1);
+      }
 
-      std::cout << "Arrangement has " << arr.number_of_vertices() << " vertices, " << arr.number_of_edges() << " edges, and " << arr.number_of_faces() << " faces" << std::endl;
+      Arrangement_2 arr;
+      matching::build_arrangement_A(arr, modules[0], modules[1], refine);
+
+      std::cout << "Arrangement has " << arr.number_of_vertices() << " vertices, "
+                << arr.number_of_edges() << " edges, and "
+                << arr.number_of_faces() << " faces" << std::endl;
+
+      const matching::FT d = matching::maximize_F(arr, modules[0], modules[1], refine);
+      std::cout << "Matching distance: " << CGAL::to_double(d) << std::endl;
   }
-  /*
-  for(Grade& g : gen_grades) {
-    std::cout << g.first_val << " " << g.second_val << std::endl;
-  }
-  */
 
   return 0;
 }
