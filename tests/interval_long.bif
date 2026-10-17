@@ -1,0 +1,7 @@
+bifiltration_phat_like
+3
+# Two vertices at the origin, edge dying at (2, 2). H_0 has the same
+# matching distance 1 against interval_short.bif as the .scc pair.
+0 0 0
+0 0 0
+1 2 2 0 1

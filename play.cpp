@@ -3,7 +3,9 @@
 #include <fstream>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <mpp_utils/create_graded_matrices_from_scc2020.h>
@@ -11,6 +13,7 @@
 #include <scc/Scc.h>
 
 #include <matching_distance.h>
+#include <bif_io.hpp>
 
 typedef matching::Kernel Kernel;
 typedef matching::Traits_2 Traits_2;
@@ -97,6 +100,37 @@ namespace barcode_templates {
     CGAL::insert(arr,curves.begin(),curves.end());
   }
 
+  void add_joins_from_grades(const std::vector<matching::Grade2>& pts,
+                             std::set<std::pair<double, double> >& joins) {
+    std::vector<matching::Grade2> grades;
+    std::set<matching::Grade2> seen;
+    for (const matching::Grade2& g : pts) {
+      if (seen.insert(g).second)
+        grades.push_back(g);
+    }
+    const index n = static_cast<index>(grades.size());
+    for (index i = 0; i < n; ++i) {
+      for (index j = i + 1; j < n; ++j) {
+        const matching::Grade2& g1 = grades[i];
+        const matching::Grade2& g2 = grades[j];
+        const bool incomparable =
+            (g1.x < g2.x && g1.y > g2.y) || (g1.x > g2.x && g1.y < g2.y);
+        if (!incomparable)
+          continue;
+        const double x = CGAL::to_double(g1.x > g2.x ? g1.x : g2.x);
+        const double y = CGAL::to_double(g1.y > g2.y ? g1.y : g2.y);
+        joins.insert(std::make_pair(x, y));
+      }
+    }
+  }
+
+  void add_joins_from_presentation(const matching::Presentation& P,
+                                   std::set<std::pair<double, double> >& gen_joins,
+                                   std::set<std::pair<double, double> >& rel_joins) {
+    add_joins_from_grades(P.generators, gen_joins);
+    add_joins_from_grades(P.relations, rel_joins);
+  }
+
   template<typename GrMat>
   matching::Presentation to_presentation(const GrMat& M) {
     matching::Presentation P;
@@ -156,13 +190,15 @@ int main(int argc, char** argv) {
 
   if(argc<2) {
     std::cerr << "Usage: " << argv[0]
-              << " file.scc [file2.scc] [--no-cgal] [--no-refine]" << std::endl;
+              << " file.scc|file.bif [file2.scc|file2.bif] [--dim d] [--no-cgal] [--no-refine]"
+              << std::endl;
     std::exit(1);
   }
 
   std::vector<std::string> input_files;
   bool build_arrangement=true;
   bool refine=true;
+  int homology_dim = 0;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -171,6 +207,16 @@ int main(int argc, char** argv) {
       build_arrangement = false;
     } else if (arg == "--no-refine") {
       refine = false;
+    } else if (arg == "--dim") {
+      if (i + 1 >= argc) {
+        std::cerr << "--dim needs an integer" << std::endl;
+        std::exit(1);
+      }
+      homology_dim = std::stoi(argv[++i]);
+      if (homology_dim < 0) {
+        std::cerr << "--dim must be non-negative" << std::endl;
+        std::exit(1);
+      }
     } else if (arg.size() >= 2 && arg[0] == '-' && arg[1] == '-') {
       std::cerr << "Unknown flag " << arg << std::endl;
       std::exit(1);
@@ -189,47 +235,38 @@ int main(int argc, char** argv) {
   typedef std::pair<Coordinate,Coordinate> Point;
   
   typedef GrMat::Coordinate_traits Grade_cast;
-  typedef GrMat::Grade Grade;
 
-  std::vector<std::string> scc_strings;
-  for (const std::string& input_filename : input_files) {
-    split_file_into_scc2020_chunks(input_filename, scc_strings);
-  }
-  
-  /*
-  for(std::string s: scc_strings) {
-      std::cout << "New string: \n\n";
-      std::cout << "***" << s << "***" << std::endl;
-  }
-  */
-
-  
   std::set<Point> gen_joins;
   std::set<Point> rel_joins;
   std::vector<matching::Presentation> modules;
 
+  auto take_presentation = [&](matching::Presentation P) {
+      barcode_templates::add_joins_from_presentation(P, gen_joins, rel_joins);
+      modules.push_back(std::move(P));
+  };
+
   //scc::verbose=true;
-  
-  for(std::string s : scc_strings) {
 
-      std::stringstream sstr(s);
-      scc::Scc<Grade_cast> parser(sstr,&Grade_cast::get_instance()) ;
-      
-      std::vector<GrMat> matrices;
-      mpp_utils::create_graded_matrices_from_scc2020(parser,matrices);
-      
-      GrMat& Mat = matrices[0];
-      
-      std::vector<Grade> gen_grades;
-      barcode_templates::get_grades_of_generators<GrMat>(Mat,gen_grades);
-      
-      std::vector<Grade> rel_grades;
-      barcode_templates::get_grades_of_relations<GrMat>(Mat,rel_grades);
-      
-      barcode_templates::get_joins(gen_grades,gen_joins);
-      barcode_templates::get_joins(rel_grades,rel_joins);
+  try {
+  for (const std::string& input_filename : input_files) {
+      if (scc_hera::is_bif_path(input_filename)) {
+          take_presentation(scc_hera::load_bif_presentation(input_filename, homology_dim));
+          continue;
+      }
 
-      modules.push_back(barcode_templates::to_presentation(Mat));
+      std::vector<std::string> scc_strings;
+      split_file_into_scc2020_chunks(input_filename, scc_strings);
+      for (std::string s : scc_strings) {
+          std::stringstream sstr(s);
+          scc::Scc<Grade_cast> parser(sstr, &Grade_cast::get_instance());
+          std::vector<GrMat> matrices;
+          mpp_utils::create_graded_matrices_from_scc2020(parser, matrices);
+          take_presentation(barcode_templates::to_presentation(matrices[0]));
+      }
+  }
+  } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
+      std::exit(1);
   }
 
   std::cout << "In total, found " << gen_joins.size() << " generator joins and " << rel_joins.size() << " relation joins " << std::endl;
@@ -250,7 +287,11 @@ int main(int argc, char** argv) {
                 << arr.number_of_faces() << " faces" << std::endl;
 
       const matching::FT d = matching::maximize_F(arr, modules[0], modules[1], refine);
-      std::cout << "Matching distance: " << CGAL::to_double(d) << std::endl;
+      std::cout << "Matching distance: ";
+      if (matching::is_infinite_F(d))
+          std::cout << "infinity" << std::endl;
+      else
+          std::cout << CGAL::to_double(d) << std::endl;
   }
 
   return 0;

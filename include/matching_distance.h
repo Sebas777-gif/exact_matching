@@ -55,6 +55,11 @@ inline FT abs_ft(const FT& v) { return v < 0 ? -v : v; }
 
 inline FT max_ft(const FT& a, const FT& b) { return a < b ? b : a; }
 
+// Exact FT has no +∞. Negative bottleneck / F means an infinite value
+// (slice diagrams with different numbers of infinite bars).
+inline FT infinite_F() { return FT(-1); }
+inline bool is_infinite_F(const FT& d) { return d < FT(0); }
+
 enum DeltaType { TYPE_I, TYPE_II, TYPE_IIIA, TYPE_IIIB };
 
 inline bool point_on_or_above_slice(const Grade2& p, const FT& s, const FT& t) {
@@ -71,7 +76,7 @@ inline DeltaType delta_type(const Grade2& p, const Grade2& q, const FT& s, const
 }
 
 // Weighted 1-parameter grade of a 2-parameter grade, equal to
-// w(ℓ) · λ^{-1}(push(p, ℓ)).  Bottleneck of these grades is F itself.
+// w(l) · lambda^-1(push(p, l)).  Bottleneck of these grades is F itself.
 inline FT weighted_grade(const Grade2& p, const FT& s, const FT& t) {
   const bool above = point_on_or_above_slice(p, s, t);
   if (s >= FT(1)) {
@@ -270,7 +275,7 @@ inline FT bottleneck(const std::vector<Bar>& A, const std::vector<Bar>& B, Witne
   for (const Bar& b : B) if (b.infinite) ++infB;
   if (infA != infB) {
     if (witness) witness->valid = false;
-    return FT(-1);
+    return infinite_F();
   }
 
   std::vector<FT> cands;
@@ -305,7 +310,7 @@ inline FT bottleneck(const std::vector<Bar>& A, const std::vector<Bar>& B, Witne
   }
   if (!found) {
     if (witness) witness->valid = false;
-    return FT(-1);
+    return infinite_F();
   }
 
   if (witness) {
@@ -709,19 +714,32 @@ inline FT maximize_F(const Arrangement_2& arr,
                      bool refine = true) {
   FT best = FT(0);
   bool any = false;
-  auto consider = [&](const FT& val) {
-    if (val < FT(0)) return;
+  bool infinite = false;
+
+  auto consider_finite = [&](const FT& val) {
     if (!any || val > best) {
       best = val;
       any = true;
     }
   };
 
+  // Ω is s > 0. Unmatched infinite bars on s = 0 can appear even when the
+  // matching distance is finite, because a horizontal slice never sees
+  // grades with larger y. Count infinity only in the open parameter space.
+  auto consider_F = [&](const FT& s, const FT& val) {
+    if (is_infinite_F(val)) {
+      if (s > FT(0)) infinite = true;
+      return;
+    }
+    consider_finite(val);
+  };
+
   for (auto vit = arr.vertices_begin(); vit != arr.vertices_end(); ++vit) {
     if (vit->is_at_open_boundary()) continue;
     const Point_2 p = vit->point();
     if (p.x() < FT(0)) continue;
-    consider(evaluate_F(M, N, p.x(), p.y()));
+    consider_F(p.x(), evaluate_F(M, N, p.x(), p.y()));
+    if (infinite) return infinite_F();
   }
 
   CGAL::Arr_naive_point_location<Arrangement_2> pl(arr);
@@ -735,7 +753,8 @@ inline FT maximize_F(const Arrangement_2& arr,
     if (interior.x() <= FT(0)) continue;
 
     Witness w0;
-    consider(evaluate_F(M, N, interior.x(), interior.y(), &w0));
+    consider_F(interior.x(), evaluate_F(M, N, interior.x(), interior.y(), &w0));
+    if (infinite) return infinite_F();
 
     if (fit->is_unbounded() && w0.valid &&
         (w0.type == TYPE_IIIA || w0.type == TYPE_IIIB) &&
@@ -744,7 +763,7 @@ inline FT maximize_F(const Arrangement_2& arr,
       if (w0.type == TYPE_IIIB) std::swap(p, q);
       const FT c = w0.same_module ? FT(1) / FT(2) : FT(1);
       const std::vector<FT> slopes = right_unbounded_slopes(fit);
-      for (const FT& r : slopes) consider(c * abs_ft(r + q.x));
+      for (const FT& r : slopes) consider_finite(c * abs_ft(r + q.x));
     }
 
     if (!refine || !w0.valid) continue;
@@ -764,11 +783,12 @@ inline FT maximize_F(const Arrangement_2& arr,
       unique_lines(lines);
 
       auto consider_pt = [&](const Point_2& pt) {
+        if (infinite) return;
         if (pt.x() < FT(0)) return;
         if (!in_face_closure(pl, fit, pt)) return;
         Witness w2;
-        consider(evaluate_F(M, N, pt.x(), pt.y(), &w2));
-        if (!w2.valid) return;
+        consider_F(pt.x(), evaluate_F(M, N, pt.x(), pt.y(), &w2));
+        if (infinite || !w2.valid) return;
         const PairKey key = make_pair_key(w2);
         if (seen.insert(key).second) queue.push_back(w2);
       };
@@ -784,6 +804,7 @@ inline FT maximize_F(const Arrangement_2& arr,
           if (line_intersection_point(lines[i], e, ip)) consider_pt(ip);
         }
       }
+      if (infinite) return infinite_F();
     }
   }
 

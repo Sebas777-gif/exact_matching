@@ -46,8 +46,9 @@ The executable is `build/play`.
 
 ## Input
 
-Each module is a **2-parameter presentation** in [scc2020](https://bitbucket.org/mkerber/chain_complex_format)
-format. A presentation block looks like:
+Each module is either a **2-parameter presentation** in [scc2020](https://bitbucket.org/mkerber/chain_complex_format)
+format, or a **1-critical bifiltration** in Hera's `.bif` format
+(`bifiltration_phat_like`). A presentation block looks like:
 
 ```plain
 scc2020
@@ -75,12 +76,18 @@ scc2020
 0.0 1.0;
 ```
 
-Inputs must be presentations (one matrix: relations vs generators), not raw
-chain complexes with more than two non-zero degrees. Minimal presentations
-from mpfree are the expected input.
+`.scc` inputs must be presentations (one matrix: relations vs generators), not
+raw chain complexes with more than two non-zero degrees. Minimal presentations
+from mpfree are the expected `.scc` input.
+
+A `.bif` file is converted in-process to a presentation of $H_d$: simplices
+of dimension $d$ become generators, simplices of dimension $d+1$ become
+relations. For $d=0$ (the default) that is the usual presentation of
+$H_0$ by vertices and edges. The reader is the one from
+`hera_aida_matching` (keyword optional; `#` comments allowed).
 
 The matching distance is taken between the **first two** presentations that
-are loaded.
+are loaded. The two files may mix `.scc` and `.bif`.
 
 ## Usage
 
@@ -90,16 +97,19 @@ Two presentations in one file (two `scc2020` blocks):
 ./play modules.scc
 ```
 
-Two files, one presentation each:
+Two files, one presentation or bifiltration each:
 
 ```bash
 ./play module_a.scc module_b.scc
+./play a.bif b.bif
+./play a.bif b.scc --dim 0
 ```
 
 ### Flags
 
 | Flag | Effect |
 | --- | --- |
+| `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for `.scc`. |
 | `--no-cgal` | Only count generator/relation joins. Do not build the arrangement or compute the distance. |
 | `--no-refine` | Maximize $F$ only on vertices and outer cells of $A_0$. Skip per-face comparison-line intersections. Faster, and can miss the exact maximum. |
 
@@ -127,7 +137,8 @@ Matching distance: 1.5
 - The arrangement statistics are for the slice-space subdivision used in the
   maximization.
 - `Matching distance` is the computed value of $d_{\mathrm{match}}$, printed
-  as a double.
+  as a double, or `infinity` when some slice with positive slope has
+  unmatched infinite bars.
 
 If fewer than two presentations are loaded, the program exits after the join
 report (or with an error if an arrangement was requested).
