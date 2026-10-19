@@ -6,11 +6,13 @@ finite presentations, following Kerber, Lesnick, and Oudot,
 
 The program builds the coarse slice-space arrangement $A_0$ (one line per
 input grade, plus $s=0$ and $s=1$), evaluates the weighted bottleneck
-distance $F$ at every vertex (Section 5), and takes the type-III limits along
-unbounded outer regions. Comparison lines that refine $A_0$ to $A$ are
-handled per face: only the $O(n^2)$ lines of the current realizing pair are
-intersected, so the huge global arrangement of $O(n^4)$ lines is never stored.
-The largest of those values is the matching distance.
+distance $F$ at every vertex (Section 5), and takes the true $s\to+\infty$
+limits of $F$ along unbounded outer rays (the bottleneck of the limiting
+diagrams, not the closed-form type-III formula of an interior witness).
+Comparison lines that refine $A_0$ to $A$ are handled per face: only the
+$O(n^2)$ lines of the current realizing pair are intersected, so the huge
+global arrangement of $O(n^4)$ lines is never stored. The largest of those
+values is the matching distance.
 
 ## Dependencies
 

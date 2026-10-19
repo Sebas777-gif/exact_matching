@@ -1,5 +1,28 @@
 #pragma once
 
+// Exact matching distance between two 2-parameter persistence modules,
+// following Kerber, Lesnick, Oudot, arXiv:1812.09085, Section 5.
+//
+// A slice is an affine line ℓ : y = s x + t in the grade plane, with
+// parameters (s, t) ∈ Ω = (0, ∞) × ℝ. Restricting a module M to ℓ gives a
+// 1-parameter persistence module M^ℓ and a barcode. The matching distance is
+//
+//     d_match(M, N) = sup_ℓ  F(ℓ),    F(ℓ) = w(ℓ) · d_B(M^ℓ, N^ℓ).
+//
+// Weighted grades (below) fold the slice weight w(ℓ) into the 1-parameter
+// filtration, so the ordinary bottleneck of those diagrams is already F.
+//
+// The parameter plane is subdivided by the coarse arrangement A0: the dual
+// line of every input grade, plus the verticals s = 0 and s = 1. On each
+// cell of A0 the combinatorial type of F is constant except across
+// comparison lines of the realizing pair. Those lines are intersected per
+// face (O(n²) of them) rather than inserted into one global O(n⁴)
+// arrangement, which does not fit in memory.
+//
+// maximize_F walks A0 vertices, true s → +∞ limits on unbounded outer
+// cells, and optionally the per-face comparison vertices (refine = false
+// skips that last step).
+
 #include <algorithm>
 #include <functional>
 #include <iostream>
@@ -25,13 +48,14 @@ namespace matching {
 typedef CGAL::Exact_predicates_exact_constructions_kernel Kernel;
 typedef Kernel::FT FT;
 typedef CGAL::Arr_linear_traits_2<Kernel> Traits_2;
-typedef Traits_2::Point_2 Point_2;
-typedef Traits_2::Line_2 Line_2;
+typedef Traits_2::Point_2 Point_2;   // (s, t) in slice-parameter space
+typedef Traits_2::Line_2 Line_2;     // a s + b t + c = 0
 typedef Traits_2::Ray_2 Ray_2;
 typedef Traits_2::Vector_2 Vector_2;
 typedef Traits_2::X_monotone_curve_2 X_monotone_curve_2;
 typedef CGAL::Arrangement_2<Traits_2> Arrangement_2;
 
+// Bigrade in the module's (x, y) plane.
 struct Grade2 {
   FT x, y;
 };
@@ -45,6 +69,8 @@ inline bool operator==(const Grade2& a, const Grade2& b) {
   return a.x == b.x && a.y == b.y;
 }
 
+// Finite presentation: generators, relations, and one column per relation
+// listing the generators it hits (GF(2), 0-based indices).
 struct Presentation {
   std::vector<Grade2> generators;
   std::vector<Grade2> relations;
@@ -60,6 +86,9 @@ inline FT max_ft(const FT& a, const FT& b) { return a < b ? b : a; }
 inline FT infinite_F() { return FT(-1); }
 inline bool is_infinite_F(const FT& d) { return d < FT(0); }
 
+// How a realizing pair of grades (p, q) sits relative to the slice y = s x + t.
+// The formula for their contribution δ_{p,q} to F depends on this type
+// (paper, §3–4): both above (I), both below (II), or one on each side (III).
 enum DeltaType { TYPE_I, TYPE_II, TYPE_IIIA, TYPE_IIIB };
 
 inline bool point_on_or_above_slice(const Grade2& p, const FT& s, const FT& t) {
@@ -71,12 +100,14 @@ inline DeltaType delta_type(const Grade2& p, const Grade2& q, const FT& s, const
   const bool q_above = point_on_or_above_slice(q, s, t);
   if (p_above && q_above) return TYPE_I;
   if (!p_above && !q_above) return TYPE_II;
-  if (p_above) return TYPE_IIIA;
-  return TYPE_IIIB;
+  if (p_above) return TYPE_IIIA;  // p above, q below
+  return TYPE_IIIB;               // p below, q above
 }
 
-// Weighted 1-parameter grade of a 2-parameter grade, equal to
-// w(l) · lambda^-1(push(p, l)).  Bottleneck of these grades is F itself.
+// Push of a 2-parameter grade onto the slice, times the slice weight w(ℓ).
+// Bottleneck of diagrams built from these values is F itself, so the
+// arrangement never has to carry w(ℓ) separately. The two formulas switch
+// at s = 1, where the weight expression in the paper changes.
 inline FT weighted_grade(const Grade2& p, const FT& s, const FT& t) {
   const bool above = point_on_or_above_slice(p, s, t);
   if (s >= FT(1)) {
@@ -85,6 +116,9 @@ inline FT weighted_grade(const Grade2& p, const FT& s, const FT& t) {
   return above ? (p.y - t) : s * p.x;
 }
 
+// One bar of a slice barcode, with the original 2-parameter grades that
+// produced the birth (and death, if finite). Those grades are the witness
+// pair used later to build comparison lines.
 struct Bar {
   FT birth;
   FT death;
@@ -94,15 +128,15 @@ struct Bar {
   bool has_death_pt;
 };
 
-inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const FT& t) {
+// Persistence of a presentation whose generators/relations have already been
+// assigned 1-parameter grades (weighted slice grades, or their s → +∞ limits).
+inline std::vector<Bar> slice_diagram_from_values(const Presentation& P,
+                                                  const std::vector<FT>& gen_val,
+                                                  const std::vector<FT>& rel_val) {
   const int n_gen = static_cast<int>(P.generators.size());
   const int n_rel = static_cast<int>(P.relations.size());
   std::vector<Bar> bars;
   if (n_gen == 0) return bars;
-
-  std::vector<FT> gen_val(n_gen), rel_val(n_rel);
-  for (int i = 0; i < n_gen; ++i) gen_val[i] = weighted_grade(P.generators[i], s, t);
-  for (int i = 0; i < n_rel; ++i) rel_val[i] = weighted_grade(P.relations[i], s, t);
 
   std::vector<int> gen_order(n_gen), rel_order(n_rel);
   for (int i = 0; i < n_gen; ++i) gen_order[i] = i;
@@ -121,6 +155,9 @@ inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const 
   std::vector<int> gen_rank(n_gen);
   for (int r = 0; r < n_gen; ++r) gen_rank[gen_order[r]] = r;
 
+  // PHAT matrix in filtration order: columns 0 .. n_gen-1 are generators
+  // (empty boundary, dim 0); columns n_gen .. are relations (dim 1), with
+  // faces rewritten to the sorted generator indices.
   const int n_cols = n_gen + n_rel;
   phat::boundary_matrix<> matrix;
   matrix.set_num_cols(n_cols);
@@ -146,6 +183,7 @@ inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const 
   phat::compute_persistence_pairs<phat::standard_reduction>(pairs, matrix);
 
   std::vector<char> gen_paired(n_gen, 0);
+  // Finite bars: a generator paired with a later relation.
   for (phat::index k = 0; k < pairs.get_num_pairs(); ++k) {
     const std::pair<phat::index, phat::index> pr = pairs.get_pair(k);
     const int birth_col = static_cast<int>(pr.first);
@@ -165,6 +203,7 @@ inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const 
     b.has_death_pt = true;
     if (b.birth < b.death) bars.push_back(b);
   }
+  // Unpaired generators are infinite bars (classes that never die on ℓ).
   for (int r = 0; r < n_gen; ++r) {
     if (gen_paired[r]) continue;
     const int gen_id = gen_order[r];
@@ -179,6 +218,21 @@ inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const 
   return bars;
 }
 
+// Persistence of the presentation along the slice (s, t): sort generators
+// and relations by weighted grade, reduce the resulting 1-parameter complex
+// with PHAT, and read off finite and infinite bars.
+inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const FT& t) {
+  const int n_gen = static_cast<int>(P.generators.size());
+  const int n_rel = static_cast<int>(P.relations.size());
+  std::vector<FT> gen_val(n_gen), rel_val(n_rel);
+  for (int i = 0; i < n_gen; ++i) gen_val[i] = weighted_grade(P.generators[i], s, t);
+  for (int i = 0; i < n_rel; ++i) rel_val[i] = weighted_grade(P.relations[i], s, t);
+  return slice_diagram_from_values(P, gen_val, rel_val);
+}
+
+// Realizing pair of F: the two grades whose weighted distance equals the
+// bottleneck. same_module is true when the pair is a bar matched to the
+// diagonal (birth and death of one module) rather than a match across M and N.
 struct Witness {
   Grade2 p, q;
   bool same_module;
@@ -186,6 +240,8 @@ struct Witness {
   bool valid;
 };
 
+// L∞ cost of matching two bars. Negative means the pair is forbidden
+// (an infinite bar cannot match a finite one).
 inline FT linf_bars(const Bar& a, const Bar& b) {
   if (a.infinite && b.infinite) return abs_ft(a.birth - b.birth);
   if (a.infinite || b.infinite) return FT(-1); // infeasible
@@ -193,7 +249,7 @@ inline FT linf_bars(const Bar& a, const Bar& b) {
 }
 
 inline FT diag_cost(const Bar& a) {
-  if (a.infinite) return FT(-1);
+  if (a.infinite) return FT(-1);  // infinite bars cannot go to the diagonal
   return (a.death - a.birth) / FT(2);
 }
 
@@ -209,6 +265,9 @@ inline bool can_diag(const Bar& a, const FT& eps) {
   return c <= eps;
 }
 
+// True iff there is a partial matching of cost ≤ eps: every bar that is
+// longer than 2 eps (so cannot go to the diagonal) is matched to the other
+// diagram. DFS augmenting paths on the bipartite graph of allowed pairs.
 inline bool matching_feasible(const std::vector<Bar>& A,
                               const std::vector<Bar>& B,
                               const FT& eps) {
@@ -269,6 +328,10 @@ inline bool matching_feasible(const std::vector<Bar>& A,
   return true;
 }
 
+// Bottleneck distance of two slice diagrams. Candidate costs are the
+// finitely many pairwise L∞ values and diagonal costs; binary search the
+// smallest feasible one. If witness is non-null, fill it with a pair of
+// grades that attains that cost (used to spawn comparison lines).
 inline FT bottleneck(const std::vector<Bar>& A, const std::vector<Bar>& B, Witness* witness) {
   int infA = 0, infB = 0;
   for (const Bar& b : A) if (b.infinite) ++infA;
@@ -313,6 +376,8 @@ inline FT bottleneck(const std::vector<Bar>& A, const std::vector<Bar>& B, Witne
     return infinite_F();
   }
 
+  // Recover a realizing pair: prefer a diagonal match (birth/death of one
+  // bar), else a cross-match of two bars whose L∞ cost equals the bottleneck.
   if (witness) {
     witness->valid = false;
     auto set_from_grades = [&](const Grade2& p, const Grade2& q, bool same, const FT& s_dummy, const FT& t_dummy) {
@@ -360,6 +425,8 @@ inline FT bottleneck(const std::vector<Bar>& A, const std::vector<Bar>& B, Witne
   return ans;
 }
 
+// F(s, t) = bottleneck of the two weighted slice diagrams. Negative slope
+// is outside Ω and contributes 0. A negative return is the infinity sentinel.
 inline FT evaluate_F(const Presentation& M, const Presentation& N,
                      const FT& s, const FT& t, Witness* witness = nullptr) {
   if (s < FT(0)) {
@@ -376,6 +443,41 @@ inline FT evaluate_F(const Presentation& M, const Presentation& N,
   return d;
 }
 
+// Weighted grade as s → +∞ along a ray with t/s → r, on the A0 face whose
+// above/below partition is that of (s_ref, t_ref). Points below the slice
+// keep their x-coordinate; points above all collapse to −r.
+inline FT grade_at_s_infinity(const Grade2& p, const FT& r,
+                              const FT& s_ref, const FT& t_ref) {
+  return point_on_or_above_slice(p, s_ref, t_ref) ? -r : p.x;
+}
+
+// Bottleneck of the two slice diagrams in that s → +∞ limit. This is the
+// actual lim F along the ray, not the closed-form c|r + q_x| of an interior
+// witness pair — that pair need not realize F out to infinity on an A0 face.
+inline FT evaluate_F_s_infinity(const Presentation& M, const Presentation& N,
+                                const FT& r, const FT& s_ref, const FT& t_ref,
+                                Witness* witness = nullptr) {
+  auto diagram = [&](const Presentation& P) {
+    const int n_gen = static_cast<int>(P.generators.size());
+    const int n_rel = static_cast<int>(P.relations.size());
+    std::vector<FT> gen_val(n_gen), rel_val(n_rel);
+    for (int i = 0; i < n_gen; ++i)
+      gen_val[i] = grade_at_s_infinity(P.generators[i], r, s_ref, t_ref);
+    for (int i = 0; i < n_rel; ++i)
+      rel_val[i] = grade_at_s_infinity(P.relations[i], r, s_ref, t_ref);
+    return slice_diagram_from_values(P, gen_val, rel_val);
+  };
+  const FT d = bottleneck(diagram(M), diagram(N), witness);
+  if (d < FT(0)) return d;
+  if (witness && witness->valid) {
+    // The limiting slice is vertical of slope s = ∞; treat as s ≥ 1.
+    witness->type = delta_type(witness->p, witness->q, s_ref, t_ref);
+  }
+  return d;
+}
+
+// Dual of a grade v = (v_x, v_y): the line t = v_y − s v_x in parameter
+// space. Crossing it changes whether v lies above or below the slice.
 inline Line_2 dual_line_of_grade(const Grade2& v) {
   return Line_2(v.x, FT(1), -v.y);
 }
@@ -398,6 +500,7 @@ inline bool same_line(const Line_2& a, const Line_2& b) {
   return CGAL::parallel(a, b) && a.has_on(b.point(0));
 }
 
+// Insert ln unless a coincident line is already present.
 inline void unique_add_line(std::vector<Line_2>& lines, const Line_2& ln) {
   if (is_degenerate_line(ln)) return;
   for (const Line_2& e : lines) {
@@ -406,6 +509,10 @@ inline void unique_add_line(std::vector<Line_2>& lines, const Line_2& ln) {
   lines.push_back(ln);
 }
 
+// Locus in (s, t) where two candidate pairs have equal δ, i.e. where the
+// realizing pair of F can switch. c1, c2 are 1 (match across modules) or
+// 1/2 (match to the diagonal). Type IIIB is rewritten as IIIA by swapping
+// the two grades. Same-type I/I and II/II never cross: those δ are constant.
 inline void add_comparison_lines(std::vector<Line_2>& curves,
                                  Grade2 p, Grade2 q, DeltaType tp, const FT& c1,
                                  Grade2 r, Grade2 spt, DeltaType tr, const FT& c2) {
@@ -421,6 +528,8 @@ inline void add_comparison_lines(std::vector<Line_2>& curves,
   if (a == TYPE_I && b == TYPE_I) return;
   if (a == TYPE_II && b == TYPE_II) return;
 
+  // Type I vs II: δ_I is a vertical gap, δ_II a horizontal gap times s.
+  // They meet on a vertical line s = s0.
   if ((a == TYPE_I && b == TYPE_II) || (a == TYPE_II && b == TYPE_I)) {
     const Grade2& Ipq = (a == TYPE_I) ? Grade2{p.y, q.y} : Grade2{r.y, spt.y};
     const Grade2& IIxy = (a == TYPE_II) ? Grade2{p.x, q.x} : Grade2{r.x, spt.x};
@@ -447,12 +556,15 @@ inline void add_comparison_lines(std::vector<Line_2>& curves,
     const Grade2 gq = (a == TYPE_I) ? q : spt;
     const FT cI = (a == TYPE_I) ? c1 : c2;
     const FT cIII = (b == TYPE_IIIA) ? c2 : c1;
+    // Type I vs III: δ_I is constant, δ_III is linear; they meet on two
+    // translates of the type-III dual line.
     const FT k = (cI / cIII) * abs_ft(gp.y - gq.y);
     add_st(-qdn.x, FT(-1), pup.y - k);
     add_st(-qdn.x, FT(-1), pup.y + k);
     return;
   }
 
+  // Type II vs III: same idea, k is a horizontal gap times s.
   if ((a == TYPE_II && b == TYPE_IIIA) || (a == TYPE_IIIA && b == TYPE_II)) {
     const Grade2 pup = (b == TYPE_IIIA) ? r : p;
     const Grade2 qdn = (b == TYPE_IIIA) ? spt : q;
@@ -468,13 +580,17 @@ inline void add_comparison_lines(std::vector<Line_2>& curves,
 
 struct LabeledGrade {
   Grade2 g;
-  int module;
+  int module;  // 0 = M, 1 = N
 };
 
+// 1/2 when both grades belong to the same module (diagonal match).
 inline FT pair_coeff(const LabeledGrade& a, const LabeledGrade& b) {
   return (a.module == b.module) ? FT(1) / FT(2) : FT(1);
 }
 
+// A point strictly inside the face with s > 0, obtained by stepping left
+// off a supporting edge. Used to evaluate F on the cell and to classify
+// the realizing pair.
 inline bool face_interior_point(Arrangement_2::Face_const_handle f, Point_2& out) {
   if (f->is_fictitious()) return false;
 
@@ -532,6 +648,9 @@ inline bool face_interior_point(Arrangement_2::Face_const_handle f, Point_2& out
   return false;
 }
 
+// Slopes s of edges of an unbounded face that run to s → +∞. Type-III
+// δ grows linearly in s on those rays, and the paper evaluates the limit
+// along each such outer direction (Lemma 10).
 inline std::vector<FT> right_unbounded_slopes(Arrangement_2::Face_const_handle f) {
   std::vector<FT> slopes;
   auto walk = [&](Arrangement_2::Ccb_halfedge_const_circulator circ) {
@@ -571,6 +690,8 @@ inline std::vector<FT> right_unbounded_slopes(Arrangement_2::Face_const_handle f
   return slopes;
 }
 
+// Distinct generator and relation grades of both modules, tagged with
+// which module they came from (needed for the 1 vs 1/2 coefficient).
 inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
                                    std::vector<LabeledGrade>& grades) {
   grades.clear();
@@ -591,6 +712,10 @@ inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
   add_unique(N.relations, 1);
 }
 
+// Coarse arrangement A0: one dual line per distinct input grade, plus
+// s = 0 and s = 1. The unused refine flag is kept so the call site can
+// pass the same boolean it later gives to maximize_F; comparison lines
+// are not inserted here.
 inline void build_arrangement_A(Arrangement_2& arr,
                                 const Presentation& M,
                                 const Presentation& N,
@@ -610,6 +735,7 @@ inline void build_arrangement_A(Arrangement_2& arr,
   CGAL::insert(arr, curves.begin(), curves.end());
 }
 
+// Dedup key for realizing pairs while walking comparison vertices of a face.
 struct PairKey {
   Grade2 p, q;
   bool same_module;
@@ -641,6 +767,9 @@ inline bool line_intersection_point(const Line_2& a, const Line_2& b, Point_2& o
   return false;
 }
 
+// True if pt lies in the closed face (interior, a bounding vertex, or a
+// bounding edge). Comparison-line intersections on the boundary still
+// belong to the cell for maximization.
 template<typename PL>
 inline bool in_face_closure(const PL& pl, Arrangement_2::Face_const_handle f, const Point_2& pt) {
   const auto obj = pl.locate(pt);
@@ -665,6 +794,7 @@ inline bool in_face_closure(const PL& pl, Arrangement_2::Face_const_handle f, co
   return false;
 }
 
+// Supporting lines of every non-fictitious edge of the face (outer and holes).
 inline void face_supporting_lines(Arrangement_2::Face_const_handle f, std::vector<Line_2>& lines) {
   auto walk = [&](Arrangement_2::Ccb_halfedge_const_circulator circ) {
     Arrangement_2::Ccb_halfedge_const_circulator curr = circ;
@@ -679,6 +809,9 @@ inline void face_supporting_lines(Arrangement_2::Face_const_handle f, std::vecto
   for (auto it = f->inner_ccbs_begin(); it != f->inner_ccbs_end(); ++it) walk(*it);
 }
 
+// Comparison lines of the current realizing pair (w.p, w.q) against every
+// other grade pair, plus the type-III supporting line of w itself. O(n²)
+// lines, local to this witness and this face.
 inline void comparison_lines_for_witness(std::vector<Line_2>& lines,
                                          const Witness& w,
                                          const std::vector<LabeledGrade>& grades,
@@ -698,6 +831,9 @@ inline void comparison_lines_for_witness(std::vector<Line_2>& lines,
                            pair_coeff(grades[i], grades[j]));
     }
   }
+  // Dual of the type-III pair: the line through which p and q lie on
+  // opposite sides of the slice. Needed so the max on the cell can sit
+  // where that pair's own δ has a kink.
   if (w.type == TYPE_IIIA) add_line(lines, Line_2(-w.q.x, FT(-1), w.p.y));
   if (w.type == TYPE_IIIB) add_line(lines, Line_2(-w.p.x, FT(-1), w.q.y));
 }
@@ -708,6 +844,10 @@ inline void unique_lines(std::vector<Line_2>& lines) {
   lines.swap(u);
 }
 
+// Section 5: d_match = max F over A0. Vertices of A0, true s → +∞ limits
+// on right-unbounded cells with s ≥ 1, and (if refine) vertices cut by the
+// current witness's comparison lines inside each face. Returns infinite_F()
+// if some slice with s > 0 has unmatched infinite bars.
 inline FT maximize_F(const Arrangement_2& arr,
                      const Presentation& M,
                      const Presentation& N,
@@ -734,6 +874,7 @@ inline FT maximize_F(const Arrangement_2& arr,
     consider_finite(val);
   };
 
+  // Vertices of A0 with s ≥ 0 (s = 0 is only used when F is finite).
   for (auto vit = arr.vertices_begin(); vit != arr.vertices_end(); ++vit) {
     if (vit->is_at_open_boundary()) continue;
     const Point_2 p = vit->point();
@@ -756,18 +897,26 @@ inline FT maximize_F(const Arrangement_2& arr,
     consider_F(interior.x(), evaluate_F(M, N, interior.x(), interior.y(), &w0));
     if (infinite) return infinite_F();
 
-    if (fit->is_unbounded() && w0.valid &&
-        (w0.type == TYPE_IIIA || w0.type == TYPE_IIIB) &&
-        interior.x() >= FT(1)) {
-      Grade2 p = w0.p, q = w0.q;
-      if (w0.type == TYPE_IIIB) std::swap(p, q);
-      const FT c = w0.same_module ? FT(1) / FT(2) : FT(1);
+    // s → +∞ along each right-unbounded outer ray of this A0 face.
+    // Do not use the paper's c|r + q_x| for the interior witness: on A0
+    // that pair generally stops realizing F before infinity, and the
+    // closed form then overestimates (often a large integer |q_x − v_x|).
+    // The limiting bottleneck is one extra persistence computation per
+    // ray, the same cost class as --no-refine.
+    if (fit->is_unbounded() && interior.x() >= FT(1)) {
       const std::vector<FT> slopes = right_unbounded_slopes(fit);
-      for (const FT& r : slopes) consider_finite(c * abs_ft(r + q.x));
+      for (const FT& r : slopes) {
+        consider_F(interior.x(),
+                   evaluate_F_s_infinity(M, N, r, interior.x(), interior.y()));
+        if (infinite) return infinite_F();
+      }
     }
 
     if (!refine || !w0.valid) continue;
 
+    // Worklist of realizing pairs on this face. A new pair at a comparison
+    // vertex can cut further lines, so we keep going until no new pair
+    // appears (still only O(n²) lines per pair, never a global overlay).
     std::set<PairKey> seen;
     std::vector<Witness> queue;
     queue.push_back(w0);
@@ -793,6 +942,8 @@ inline FT maximize_F(const Arrangement_2& arr,
         if (seen.insert(key).second) queue.push_back(w2);
       };
 
+      // Intersect the witness's comparison lines with each other and with
+      // the face boundary; evaluate F at hits that lie in the closed cell.
       const int nl = static_cast<int>(lines.size());
       for (int i = 0; i < nl; ++i) {
         for (int j = i + 1; j < nl; ++j) {
