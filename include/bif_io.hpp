@@ -164,4 +164,70 @@ inline matching::Presentation load_bif_presentation(const std::string& path, int
     return presentation_from_bif(read_bif(path), homology_dim);
 }
 
+// Write C_{d+1} --∂_{d+1}--> C_d --∂_d--> C_{d-1} as scc2020 so that
+// mpfree's default --dim=1 presents H_d = ker(∂_d)/im(∂_{d+1}).
+//
+// The size line is n_{d+1} n_d n_{d-1}. For d=0 there are no (-1)-simplices,
+// so the third count is 0 and the file is already a presentation of the
+// unminimized H_0. The previous writer used n_d as the third count and, for
+// d=0, wrote the vertices twice; at d=2 that put edge indices into an
+// n_triangles-row matrix and mpfree segfaulted.
+inline void write_chain_complex_scc(const std::string& path,
+                                    const std::vector<BifSimplex>& simplices,
+                                    int homology_dim)
+{
+    int max_dim = 0;
+    for (const auto& s : simplices)
+        max_dim = std::max(max_dim, s.dim);
+    if (homology_dim < 0 || homology_dim > max_dim)
+        throw std::runtime_error("homology dimension out of range for this bifiltration");
+
+    const int high = homology_dim + 1;
+    const int mid = homology_dim;
+    const int low = homology_dim - 1;
+    const int n = static_cast<int>(simplices.size());
+    std::vector<int> rank(n, -1);
+    std::vector<int> by_dim(max_dim + 2, 0);
+    for (int i = 0; i < n; ++i) {
+        rank[i] = by_dim[simplices[i].dim];
+        ++by_dim[simplices[i].dim];
+    }
+    const int n_high = high <= max_dim ? by_dim[high] : 0;
+    const int n_mid = by_dim[mid];
+    const int n_low = low >= 0 ? by_dim[low] : 0;
+
+    std::ofstream out(path);
+    if (!out)
+        throw std::runtime_error("cannot write " + path);
+    out.setf(std::ios::fixed);
+    out.precision(8);
+    out << "scc2020\n2\n" << n_high << " " << n_mid << " " << n_low << "\n";
+
+    auto write_dim = [&](int dim, int face_dim) {
+        for (int i = 0; i < n; ++i) {
+            if (simplices[i].dim != dim)
+                continue;
+            out << simplices[i].x << " " << simplices[i].y << " ;";
+            if (face_dim >= 0) {
+                for (int b : simplices[i].boundary) {
+                    if (b < 0 || b >= n)
+                        continue;
+                    if (simplices[b].dim != face_dim)
+                        continue;
+                    out << " " << rank[b];
+                }
+            }
+            out << "\n";
+        }
+    };
+    if (n_high > 0)
+        write_dim(high, mid);
+    write_dim(mid, low);
+    if (n_low > 0) {
+        for (const auto& s : simplices)
+            if (s.dim == low)
+                out << s.x << " " << s.y << " ;\n";
+    }
+}
+
 }  // namespace scc_hera

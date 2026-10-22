@@ -1,6 +1,4 @@
 #include <iostream>
-#include <sstream>
-#include <fstream>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -8,12 +6,8 @@
 #include <utility>
 #include <vector>
 
-#include <mpp_utils/create_graded_matrices_from_scc2020.h>
-#include <mpp_utils/Graded_matrix.h>
-#include <scc/Scc.h>
-
 #include <matching_distance.h>
-#include <bif_io.hpp>
+#include <aida_preprocess.hpp>
 
 typedef matching::Kernel Kernel;
 typedef matching::Traits_2 Traits_2;
@@ -28,7 +22,7 @@ typedef Arrangement_2::Halfedge_handle Halfedge_handle;
 
 namespace barcode_templates {
 
-  typedef mpp_utils::index index;
+  typedef int index;
 
   template<typename GrMat> void get_grades_of_generators(GrMat& M, std::vector<typename GrMat::Grade>& grades) {
     typedef typename GrMat::Grade Grade;
@@ -131,58 +125,6 @@ namespace barcode_templates {
     add_joins_from_grades(P.relations, rel_joins);
   }
 
-  template<typename GrMat>
-  matching::Presentation to_presentation(const GrMat& M) {
-    matching::Presentation P;
-    P.generators.resize(M.num_rows);
-    for (index i = 0; i < M.num_rows; ++i) {
-      P.generators[i].x = matching::FT(M.row_grades[i].at[0]);
-      P.generators[i].y = matching::FT(M.row_grades[i].at[1]);
-    }
-    const index n_rel = M.get_num_cols();
-    P.relations.resize(n_rel);
-    P.columns.resize(n_rel);
-    for (index i = 0; i < n_rel; ++i) {
-      P.relations[i].x = matching::FT(M.grades[i].at[0]);
-      P.relations[i].y = matching::FT(M.grades[i].at[1]);
-      std::vector<index> col;
-      M.get_col(i, col);
-      P.columns[i].assign(col.begin(), col.end());
-    }
-    return P;
-  }
-
-}
-
-
-void split_file_into_scc2020_chunks(std::string input_filename,std::vector<std::string>& scc_instances) {
-
-    std::ifstream ifstr(input_filename);
-
-    std::string next, curr_scc;
-
-    
-    while(ifstr.good()) {
-
-	std::getline(ifstr,next);
-
-	if(next=="") {
-	    continue;
-	}
-
-	if(next=="scc2020") {
-	    if(curr_scc!="") {
-		scc_instances.push_back(curr_scc);
-		curr_scc="";
-	    }
-	}
-	curr_scc.append(next);
-	curr_scc.append("\n");
-    }
-    if(curr_scc!="") {
-	scc_instances.push_back(curr_scc);
-    }
-    
 }
 
 
@@ -190,7 +132,7 @@ int main(int argc, char** argv) {
 
   if(argc<2) {
     std::cerr << "Usage: " << argv[0]
-              << " file.scc|file.bif [file2.scc|file2.bif] [--dim d] [--no-cgal] [--no-refine]"
+              << " file.scc|file.sccsum|file.bif [file2] [--dim d] [--no-cgal] [--no-refine] [--no-aida]"
               << std::endl;
     std::exit(1);
   }
@@ -198,6 +140,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> input_files;
   bool build_arrangement=true;
   bool refine=true;
+  bool preprocess=true;
   int homology_dim = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -207,6 +150,8 @@ int main(int argc, char** argv) {
       build_arrangement = false;
     } else if (arg == "--no-refine") {
       refine = false;
+    } else if (arg == "--no-aida") {
+      preprocess = false;
     } else if (arg == "--dim") {
       if (i + 1 >= argc) {
         std::cerr << "--dim needs an integer" << std::endl;
@@ -230,52 +175,47 @@ int main(int argc, char** argv) {
     std::exit(1);
   }
   
-  typedef mpp_utils::Graded_matrix<> GrMat;
-  typedef GrMat::Coordinate Coordinate;
-  typedef std::pair<Coordinate,Coordinate> Point;
-  
-  typedef GrMat::Coordinate_traits Grade_cast;
-
-  std::set<Point> gen_joins;
-  std::set<Point> rel_joins;
-  std::vector<matching::Presentation> modules;
-
-  auto take_presentation = [&](matching::Presentation P) {
-      barcode_templates::add_joins_from_presentation(P, gen_joins, rel_joins);
-      modules.push_back(std::move(P));
-  };
-
-  //scc::verbose=true;
+  std::set<std::pair<double, double> > gen_joins;
+  std::set<std::pair<double, double> > rel_joins;
+  std::vector<matching::Module> modules;
 
   try {
   for (const std::string& input_filename : input_files) {
-      if (scc_hera::is_bif_path(input_filename)) {
-          take_presentation(scc_hera::load_bif_presentation(input_filename, homology_dim));
-          continue;
-      }
-
-      std::vector<std::string> scc_strings;
-      split_file_into_scc2020_chunks(input_filename, scc_strings);
-      for (std::string s : scc_strings) {
-          std::stringstream sstr(s);
-          scc::Scc<Grade_cast> parser(sstr, &Grade_cast::get_instance());
-          std::vector<GrMat> matrices;
-          mpp_utils::create_graded_matrices_from_scc2020(parser, matrices);
-          take_presentation(barcode_templates::to_presentation(matrices[0]));
-      }
+      matching::Module M = scc_hera::load_module(input_filename, homology_dim, preprocess);
+      for (const matching::Presentation& P : M.summands)
+          barcode_templates::add_joins_from_presentation(P, gen_joins, rel_joins);
+      modules.push_back(std::move(M));
   }
   } catch (const std::exception& ex) {
       std::cerr << ex.what() << std::endl;
       std::exit(1);
   }
 
+  // One file with exactly two presentations: treat them as the two modules
+  // (old scc2020 two-block convention).
+  if (modules.size() == 1 && modules[0].summands.size() == 2) {
+      matching::Module A = matching::as_module(modules[0].summands[0]);
+      matching::Module B = matching::as_module(modules[0].summands[1]);
+      modules.clear();
+      modules.push_back(std::move(A));
+      modules.push_back(std::move(B));
+  }
+
   std::cout << "In total, found " << gen_joins.size() << " generator joins and " << rel_joins.size() << " relation joins " << std::endl;
   std::cout << "Sum: " << gen_joins.size() + rel_joins.size() << std::endl;
-  std::cout << "Loaded " << modules.size() << " presentation(s)" << std::endl;
+  std::cout << "Loaded " << modules.size() << " module(s)";
+  if (!modules.empty()) {
+      std::cout << " with";
+      for (std::size_t i = 0; i < modules.size(); ++i) {
+          if (i) std::cout << " and";
+          std::cout << " " << modules[i].summands.size() << " summand(s)";
+      }
+  }
+  std::cout << std::endl;
 
   if(build_arrangement) {
-      if (modules.size() < 2) {
-          std::cerr << "Matching distance needs two presentations (two scc2020 blocks or two files)" << std::endl;
+      if (modules.size() != 2) {
+          std::cerr << "Matching distance needs two modules (two files, or one file with two scc2020 blocks)" << std::endl;
           std::exit(1);
       }
 

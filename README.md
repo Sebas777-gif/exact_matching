@@ -82,14 +82,24 @@ scc2020
 raw chain complexes with more than two non-zero degrees. Minimal presentations
 from mpfree are the expected `.scc` input.
 
-A `.bif` file is converted in-process to a presentation of $H_d$: simplices
-of dimension $d$ become generators, simplices of dimension $d+1$ become
-relations. For $d=0$ (the default) that is the usual presentation of
-$H_0$ by vertices and edges. The reader is the one from
-`hera_aida_matching` (keyword optional; `#` comments allowed).
+By default each file is one module and is preprocessed with **mpfree** (for
+`.bif`) and **AIDA** (for `.bif` and `.scc`). AIDA's indecomposable summands
+become the presentations of that module. $A_0$ is built from the union of
+their distinct grades. Each evaluation of $F$ slices the summands separately
+(rank-1 intervals in constant time) and concatenates the barcodes, then runs
+one bottleneck. Matching distance does not factor over the summands.
 
-The matching distance is taken between the **first two** presentations that
-are loaded. The two files may mix `.scc` and `.bif`.
+A `.sccsum` file is already decomposed and is read as-is. `--no-aida` skips
+mpfree and AIDA: a `.bif` is converted in-process to a (generally non-minimal)
+presentation of $H_d$ by taking $d$-simplices as generators and
+$(d+1)$-simplices as relations.
+
+The matching distance is taken between **two modules** (two files, or one
+file with exactly two `scc2020` blocks). The two files may mix `.scc`,
+`.sccsum`, and `.bif`.
+
+Set `$MPFREE` and `$AIDA` (or `$AIDA_WITHOUT_STATS`) if the binaries are not
+on `PATH`.
 
 ## Usage
 
@@ -112,6 +122,7 @@ Two files, one presentation or bifiltration each:
 | Flag | Effect |
 | --- | --- |
 | `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for `.scc`. |
+| `--no-aida` | Do not run mpfree or AIDA. Use the file as a raw presentation (or the in-process $H_d$ presentation of a `.bif`). |
 | `--no-cgal` | Only count generator/relation joins. Do not build the arrangement or compute the distance. |
 | `--no-refine` | Maximize $F$ only on vertices and outer cells of $A_0$. Skip per-face comparison-line intersections. Faster, and can miss the exact maximum. |
 
@@ -119,6 +130,8 @@ Flags may appear before or after the file names.
 
 ```bash
 ./play a.scc b.scc --no-refine
+./play a.bif b.bif --dim 0 --no-refine
+./play --no-aida tests/interval_long.scc tests/interval_short.scc
 ./play --no-cgal modules.scc
 ```
 

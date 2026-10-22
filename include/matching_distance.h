@@ -77,6 +77,19 @@ struct Presentation {
   std::vector<std::vector<int> > columns;
 };
 
+// Direct sum of presentations (AIDA indecomposables of one module).
+// Matching distance does not factor over summands; F uses the union of
+// their slice barcodes. A0 uses the union of their distinct grades.
+struct Module {
+  std::vector<Presentation> summands;
+};
+
+inline Module as_module(Presentation P) {
+  Module M;
+  M.summands.push_back(std::move(P));
+  return M;
+}
+
 inline FT abs_ft(const FT& v) { return v < 0 ? -v : v; }
 
 inline FT max_ft(const FT& a, const FT& b) { return a < b ? b : a; }
@@ -130,6 +143,37 @@ struct Bar {
 
 // Persistence of a presentation whose generators/relations have already been
 // assigned 1-parameter grades (weighted slice grades, or their s → +∞ limits).
+inline std::vector<Bar> slice_diagram_rank1(const Presentation& P,
+                                            const std::vector<FT>& gen_val,
+                                            const std::vector<FT>& rel_val) {
+  std::vector<Bar> bars;
+  Bar b;
+  b.birth = gen_val[0];
+  b.birth_pt = P.generators[0];
+  bool kills = false;
+  if (!P.relations.empty() && !P.columns.empty()) {
+    for (int g : P.columns[0]) {
+      if (g == 0) {
+        kills = true;
+        break;
+      }
+    }
+  }
+  if (!kills) {
+    b.infinite = true;
+    b.death = FT(0);
+    b.has_death_pt = false;
+    bars.push_back(b);
+    return bars;
+  }
+  b.infinite = false;
+  b.death = rel_val[0];
+  b.death_pt = P.relations[0];
+  b.has_death_pt = true;
+  if (b.birth < b.death) bars.push_back(b);
+  return bars;
+}
+
 inline std::vector<Bar> slice_diagram_from_values(const Presentation& P,
                                                   const std::vector<FT>& gen_val,
                                                   const std::vector<FT>& rel_val) {
@@ -137,6 +181,7 @@ inline std::vector<Bar> slice_diagram_from_values(const Presentation& P,
   const int n_rel = static_cast<int>(P.relations.size());
   std::vector<Bar> bars;
   if (n_gen == 0) return bars;
+  if (n_gen == 1 && n_rel <= 1) return slice_diagram_rank1(P, gen_val, rel_val);
 
   std::vector<int> gen_order(n_gen), rel_order(n_rel);
   for (int i = 0; i < n_gen; ++i) gen_order[i] = i;
@@ -228,6 +273,15 @@ inline std::vector<Bar> slice_diagram(const Presentation& P, const FT& s, const 
   for (int i = 0; i < n_gen; ++i) gen_val[i] = weighted_grade(P.generators[i], s, t);
   for (int i = 0; i < n_rel; ++i) rel_val[i] = weighted_grade(P.relations[i], s, t);
   return slice_diagram_from_values(P, gen_val, rel_val);
+}
+
+inline std::vector<Bar> slice_diagram(const Module& M, const FT& s, const FT& t) {
+  std::vector<Bar> bars;
+  for (const Presentation& P : M.summands) {
+    std::vector<Bar> part = slice_diagram(P, s, t);
+    bars.insert(bars.end(), part.begin(), part.end());
+  }
+  return bars;
 }
 
 // Realizing pair of F: the two grades whose weighted distance equals the
@@ -443,6 +497,22 @@ inline FT evaluate_F(const Presentation& M, const Presentation& N,
   return d;
 }
 
+inline FT evaluate_F(const Module& M, const Module& N,
+                     const FT& s, const FT& t, Witness* witness = nullptr) {
+  if (s < FT(0)) {
+    if (witness) witness->valid = false;
+    return FT(0);
+  }
+  const std::vector<Bar> dM = slice_diagram(M, s, t);
+  const std::vector<Bar> dN = slice_diagram(N, s, t);
+  const FT d = bottleneck(dM, dN, witness);
+  if (d < FT(0)) return d;
+  if (witness && witness->valid) {
+    witness->type = delta_type(witness->p, witness->q, s, t);
+  }
+  return d;
+}
+
 // Weighted grade as s → +∞ along a ray with t/s → r, on the A0 face whose
 // above/below partition is that of (s_ref, t_ref). Points below the slice
 // keep their x-coordinate; points above all collapse to −r.
@@ -471,6 +541,37 @@ inline FT evaluate_F_s_infinity(const Presentation& M, const Presentation& N,
   if (d < FT(0)) return d;
   if (witness && witness->valid) {
     // The limiting slice is vertical of slope s = ∞; treat as s ≥ 1.
+    witness->type = delta_type(witness->p, witness->q, s_ref, t_ref);
+  }
+  return d;
+}
+
+inline std::vector<Bar> slice_diagram_s_infinity(const Presentation& P, const FT& r,
+                                                 const FT& s_ref, const FT& t_ref) {
+  const int n_gen = static_cast<int>(P.generators.size());
+  const int n_rel = static_cast<int>(P.relations.size());
+  std::vector<FT> gen_val(n_gen), rel_val(n_rel);
+  for (int i = 0; i < n_gen; ++i)
+    gen_val[i] = grade_at_s_infinity(P.generators[i], r, s_ref, t_ref);
+  for (int i = 0; i < n_rel; ++i)
+    rel_val[i] = grade_at_s_infinity(P.relations[i], r, s_ref, t_ref);
+  return slice_diagram_from_values(P, gen_val, rel_val);
+}
+
+inline FT evaluate_F_s_infinity(const Module& M, const Module& N,
+                                const FT& r, const FT& s_ref, const FT& t_ref,
+                                Witness* witness = nullptr) {
+  auto diagram = [&](const Module& Mod) {
+    std::vector<Bar> bars;
+    for (const Presentation& P : Mod.summands) {
+      std::vector<Bar> part = slice_diagram_s_infinity(P, r, s_ref, t_ref);
+      bars.insert(bars.end(), part.begin(), part.end());
+    }
+    return bars;
+  };
+  const FT d = bottleneck(diagram(M), diagram(N), witness);
+  if (d < FT(0)) return d;
+  if (witness && witness->valid) {
     witness->type = delta_type(witness->p, witness->q, s_ref, t_ref);
   }
   return d;
@@ -692,24 +793,33 @@ inline std::vector<FT> right_unbounded_slopes(Arrangement_2::Face_const_handle f
 
 // Distinct generator and relation grades of both modules, tagged with
 // which module they came from (needed for the 1 vs 1/2 coefficient).
-inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
+inline void collect_labeled_grades(const Module& M, const Module& N,
                                    std::vector<LabeledGrade>& grades) {
   grades.clear();
-  auto add_unique = [&](const std::vector<Grade2>& pts, int module) {
+  auto add_module = [&](const Module& Mod, int module) {
     std::set<Grade2> seen;
-    for (const Grade2& g : pts) {
-      if (seen.insert(g).second) {
-        LabeledGrade lg;
-        lg.g = g;
-        lg.module = module;
-        grades.push_back(lg);
+    auto add = [&](const std::vector<Grade2>& pts) {
+      for (const Grade2& g : pts) {
+        if (seen.insert(g).second) {
+          LabeledGrade lg;
+          lg.g = g;
+          lg.module = module;
+          grades.push_back(lg);
+        }
       }
+    };
+    for (const Presentation& P : Mod.summands) {
+      add(P.generators);
+      add(P.relations);
     }
   };
-  add_unique(M.generators, 0);
-  add_unique(M.relations, 0);
-  add_unique(N.generators, 1);
-  add_unique(N.relations, 1);
+  add_module(M, 0);
+  add_module(N, 1);
+}
+
+inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
+                                   std::vector<LabeledGrade>& grades) {
+  collect_labeled_grades(as_module(M), as_module(N), grades);
 }
 
 // Coarse arrangement A0: one dual line per distinct input grade, plus
@@ -717,8 +827,8 @@ inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
 // pass the same boolean it later gives to maximize_F; comparison lines
 // are not inserted here.
 inline void build_arrangement_A(Arrangement_2& arr,
-                                const Presentation& M,
-                                const Presentation& N,
+                                const Module& M,
+                                const Module& N,
                                 bool /*refine*/) {
   std::vector<LabeledGrade> grades;
   collect_labeled_grades(M, N, grades);
@@ -733,6 +843,13 @@ inline void build_arrangement_A(Arrangement_2& arr,
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(0), FT(0)), Point_2(FT(0), FT(1)))));
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(1), FT(0)), Point_2(FT(1), FT(1)))));
   CGAL::insert(arr, curves.begin(), curves.end());
+}
+
+inline void build_arrangement_A(Arrangement_2& arr,
+                                const Presentation& M,
+                                const Presentation& N,
+                                bool refine) {
+  build_arrangement_A(arr, as_module(M), as_module(N), refine);
 }
 
 // Dedup key for realizing pairs while walking comparison vertices of a face.
@@ -849,8 +966,8 @@ inline void unique_lines(std::vector<Line_2>& lines) {
 // current witness's comparison lines inside each face. Returns infinite_F()
 // if some slice with s > 0 has unmatched infinite bars.
 inline FT maximize_F(const Arrangement_2& arr,
-                     const Presentation& M,
-                     const Presentation& N,
+                     const Module& M,
+                     const Module& N,
                      bool refine = true) {
   FT best = FT(0);
   bool any = false;
@@ -960,6 +1077,13 @@ inline FT maximize_F(const Arrangement_2& arr,
   }
 
   return any ? best : FT(0);
+}
+
+inline FT maximize_F(const Arrangement_2& arr,
+                     const Presentation& M,
+                     const Presentation& N,
+                     bool refine = true) {
+  return maximize_F(arr, as_module(M), as_module(N), refine);
 }
 
 }  // namespace matching
