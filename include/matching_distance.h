@@ -689,11 +689,55 @@ inline FT pair_coeff(const LabeledGrade& a, const LabeledGrade& b) {
   return (a.module == b.module) ? FT(1) / FT(2) : FT(1);
 }
 
-// A point strictly inside the face with s > 0, obtained by stepping left
-// off a supporting edge. Used to evaluate F on the cell and to classify
-// the realizing pair.
-inline bool face_interior_point(Arrangement_2::Face_const_handle f, Point_2& out) {
+template<typename PL>
+inline bool in_face_interior(const PL& pl, Arrangement_2::Face_const_handle f, const Point_2& pt) {
+  const auto obj = pl.locate(pt);
+  using FH = Arrangement_2::Face_const_handle;
+  if (const FH* fp = std::get_if<FH>(&obj)) return *fp == f;
+  return false;
+}
+
+inline Vector_2 l1_unit(const Vector_2& v) {
+  const FT n = FT(1) + abs_ft(v.x()) + abs_ft(v.y());
+  return Vector_2(v.x() / n, v.y() / n);
+}
+
+// Direction of h from source to target, using the supporting line (works
+// when one or both ends sit at infinity).
+inline Vector_2 oriented_halfedge_dir(Arrangement_2::Halfedge_const_handle h) {
+  Vector_2 dir = h->curve().supporting_line().to_vector();
+  if (dir.x() < FT(0) || (dir.x() == FT(0) && dir.y() < FT(0)))
+    dir = -dir;
+  if (h->direction() == CGAL::ARR_RIGHT_TO_LEFT)
+    dir = -dir;
+  return dir;
+}
+
+// A point strictly inside the face with s > 0. Step a short L1-normalized
+// offset to the left of a supporting edge (the face is on the left) and
+// keep the sample only if point location returns this open face. Offsets
+// proportional to ln.point(1) on unbounded edges were large enough to
+// land in a neighbouring cell; evaluate_F_s_infinity then mixed that
+// cell's above/below split with this face's outer slopes and overestimated.
+template<typename PL>
+inline bool face_interior_point(const PL& pl, Arrangement_2::Face_const_handle f, Point_2& out) {
   if (f->is_fictitious()) return false;
+
+  static const int k_off[] = {8, 32, 128, 512, 2048, 8192, 32768, 131072, 524288};
+
+  auto try_from = [&](const Point_2& base, const Vector_2& left) -> bool {
+    const Vector_2 u = l1_unit(left);
+    if (u.x() == FT(0) && u.y() == FT(0)) return false;
+    for (int k : k_off) {
+      const Point_2 p = base + u / FT(k);
+      if (p.x() <= FT(0)) continue;
+      if (in_face_interior(pl, f, p)) {
+        out = p;
+        return true;
+      }
+    }
+    return false;
+  };
 
   auto try_ccb = [&](Arrangement_2::Ccb_halfedge_const_circulator circ) -> bool {
     Arrangement_2::Ccb_halfedge_const_circulator curr = circ;
@@ -702,36 +746,37 @@ inline bool face_interior_point(Arrangement_2::Face_const_handle f, Point_2& out
         ++curr;
         continue;
       }
+      const Vector_2 dir = oriented_halfedge_dir(curr);
+      const Vector_2 left(-dir.y(), dir.x());
       const bool src_inf = curr->source()->is_at_open_boundary();
       const bool tgt_inf = curr->target()->is_at_open_boundary();
-      Point_2 p, q;
-      bool have_two = false;
+
       if (!src_inf && !tgt_inf) {
-        p = curr->source()->point();
-        q = curr->target()->point();
-        have_two = (p != q);
+        const Point_2 p = curr->source()->point();
+        const Point_2 q = curr->target()->point();
+        if (p != q && try_from(CGAL::midpoint(p, q), left)) return true;
       } else if (!src_inf || !tgt_inf) {
         const Point_2 base = src_inf ? curr->target()->point() : curr->source()->point();
-        const Line_2 ln = curr->curve().supporting_line();
-        Point_2 other = ln.point(1);
-        if (other == base) other = ln.point(-1);
-        p = base;
-        q = other;
-        have_two = (p != q);
+        const Vector_2 along = l1_unit(src_inf ? -dir : dir);
+        for (int k : k_off) {
+          if (try_from(base + along / FT(k), left)) return true;
+        }
       } else {
         const Line_2 ln = curr->curve().supporting_line();
-        p = ln.point(0);
-        q = ln.point(1);
-        have_two = (p != q);
-      }
-      if (have_two) {
-        const Point_2 mid = CGAL::midpoint(p, q);
-        const Vector_2 v = q - p;
-        const Vector_2 left(-v.y(), v.x());
-        out = mid + left / FT(32);
-        if (out.x() > FT(0)) return true;
-        out = mid - left / FT(32);
-        if (out.x() > FT(0)) return true;
+        Point_2 on_line;
+        bool have = false;
+        if (ln.b() != FT(0)) {
+          const FT s = FT(1);
+          on_line = Point_2(s, -(ln.a() * s + ln.c()) / ln.b());
+          have = true;
+        } else if (ln.a() != FT(0)) {
+          const FT s = -ln.c() / ln.a();
+          if (s > FT(0)) {
+            on_line = Point_2(s, FT(0));
+            have = true;
+          }
+        }
+        if (have && try_from(on_line, left)) return true;
       }
       ++curr;
     } while (curr != circ);
@@ -1007,7 +1052,7 @@ inline FT maximize_F(const Arrangement_2& arr,
   for (auto fit = arr.faces_begin(); fit != arr.faces_end(); ++fit) {
     if (fit->is_fictitious()) continue;
     Point_2 interior;
-    if (!face_interior_point(fit, interior)) continue;
+    if (!face_interior_point(pl, fit, interior)) continue;
     if (interior.x() <= FT(0)) continue;
 
     Witness w0;
