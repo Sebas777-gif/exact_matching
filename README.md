@@ -135,6 +135,9 @@ Flags may appear before or after the file names.
 ./play --no-cgal modules.scc
 ```
 
+Small maximizer regressions (unbounded \(A_0\) faces, type-III limits,
+unmatched infinite bars) are in `tests/run_small.sh`; see `tests/README.md`.
+
 ## Output
 
 Typical run:

@@ -48,3 +48,30 @@ weight times Euclidean factor cancel, so $F=1$.
 
 The same value 1 is the interleaving distance of the two modules: you must
 shift by 1 in both coordinates to push (1, 1) onto (2, 2).
+
+## Small regression tests
+
+`run_small.sh` runs tiny presentations that hit the same maximizer pitfalls
+as the slow random `.bif` pairs, each in well under a minute:
+
+```bash
+./tests/run_small.sh
+PLAY_BIN=./build/play ./tests/run_small.sh
+```
+
+Every case uses `--no-aida`. `--no-refine` is the path that used to
+overestimate; refine is also checked on the smallest pairs.
+
+| Pair | Expected | What it covers |
+| --- | --- | --- |
+| `interval_long` vs `interval_short` (`.scc` and `.bif`) | 1 | Rank-1 intervals, refine and not |
+| `far_merge` vs `a0_anchors` | 25.5 | Unbounded \(A_0\) faces with extra dual lines at \(x,y\in\{10,20,30\}\). A sample that leaves the face mixed those partitions with slope \(r=-30\) and reported 30 (or 51) instead of the diagonal cost of the length-51 bar |
+| `far_merge.bif` vs `a0_anchors.bif` | 25.5 | Same distance as a 1-critical \(H_0\) bifiltration |
+| `merge_horizontal` vs `merge_vertical` | 25 | Type-III slices. The Lemma-10 closed form \(c\|r+q_x\|\) on an outer \(A_0\) ray is 50; the true \(s\to+\infty\) bottleneck is 25 |
+| `free_one` vs `free_two` | infinity | Unmatched infinite bars, \(s>0\) |
+| `prism_1` vs `prism_2` `--dim 2 --no-aida` | infinity | Raw \(H_2\) presentations of the two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
+
+`far_merge` is two generators at the origin killed together at \((51,0)\): one
+finite bar of length 51 and one infinite bar. `a0_anchors` is a single
+infinite bar (plus unused relation grades that only cut \(A_0\)). The
+infinite bars match at cost 0; the finite bar goes to the diagonal at 25.5.
