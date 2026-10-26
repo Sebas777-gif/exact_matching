@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Small regression tests for maximize_F pitfalls that showed up on the
-# large random .bif pairs (type-III / s→+∞ overestimates, unmatched
-# infinite bars). Each case is a handful of grades and should finish in
-# well under a minute.
+# Regression tests for maximize_F pitfalls that showed up on the large
+# random .bif pairs (type-III / s→+∞ overestimates, unmatched infinite
+# bars).
 #
 # Usage:
-#   ./tests/run_small.sh
+#   ./tests/run_small.sh           # tiny cases plus four 10–30s cases
+#   ./tests/run_small.sh --fast    # tiny cases only (~0.2s each)
+#   ./tests/run_medium.sh          # larger 10–30s timing set
 #   PLAY_BIN=./build/play ./tests/run_small.sh
 #
 # Requires --no-aida so AIDA/mpfree are not in the loop.
@@ -15,9 +16,25 @@ set -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAY_BIN="${PLAY_BIN:-$ROOT/build/play}"
-TIMEOUT_SEC="${TIMEOUT_SEC:-60}"
+TIMEOUT_SEC="${TIMEOUT_SEC:-90}"
+FAST=0
 failed=0
 passed=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --fast) FAST=1 ;;
+        -h|--help)
+            echo "Usage: $0 [--fast]"
+            echo "  --fast   skip the 10–30s medium cases"
+            exit 0
+            ;;
+        *)
+            echo "error: unknown argument: $arg" >&2
+            exit 1
+            ;;
+    esac
+done
 
 if [[ ! -x "$PLAY_BIN" ]]; then
     echo "error: play not executable: $PLAY_BIN" >&2
@@ -119,6 +136,33 @@ run_case "unmatched infinite bars" infinity \
 # d-simplex presentation (no 3-simplices). Same infinity as Hera --dim 2.
 run_case "prism H_2 --no-aida" infinity \
     tests/prism_1.bif tests/prism_2.bif --dim 2 --no-aida --no-refine
+
+if [[ "$FAST" -eq 0 ]]; then
+    echo
+    echo "Medium cases (about 10–30s each):"
+
+    # Same 25.5 as far_merge vs a0_anchors, with 140 unused relation
+    # grades so A0 has enough dual lines for the s→+∞ interior-point
+    # bug to have room to fire. ~19s here.
+    run_case "far_merge vs 140 A0 anchors" 25.5 \
+        tests/far_merge.scc tests/a0_anchors_medium.scc --no-aida --no-refine
+
+    # Type-III pair with ~140 distinct grades (70 dummy duals on each
+    # side). Closed form c|r+q_x| is 50; true distance 25. ~19s.
+    run_case "horizontal vs vertical merge medium" 25 \
+        tests/merge_horizontal_medium.scc tests/merge_vertical_medium.scc --no-aida --no-refine
+
+    # Real 10-vertex 1-skeleta, same H_0 pipeline as the slow random
+    # benchmark pairs. ~13–17s.
+    run_case "v10 bif sample 1 vs 2" 3 \
+        tests/random_bifiltrations/r_bif_v_10_dim_2_n_top_simplices_50_sample_1.bif \
+        tests/random_bifiltrations/r_bif_v_10_dim_2_n_top_simplices_50_sample_2.bif \
+        --dim 0 --no-aida --no-refine
+    run_case "v10 bif sample 1 vs 5" 2.5 \
+        tests/random_bifiltrations/r_bif_v_10_dim_2_n_top_simplices_50_sample_1.bif \
+        tests/random_bifiltrations/r_bif_v_10_dim_2_n_top_simplices_50_sample_5.bif \
+        --dim 0 --no-aida --no-refine
+fi
 
 echo
 if [[ "$failed" -eq 0 ]]; then

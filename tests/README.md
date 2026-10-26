@@ -51,11 +51,12 @@ shift by 1 in both coordinates to push (1, 1) onto (2, 2).
 
 ## Small regression tests
 
-`run_small.sh` runs tiny presentations that hit the same maximizer pitfalls
-as the slow random `.bif` pairs, each in well under a minute:
+`run_small.sh` runs presentations that hit the same maximizer pitfalls
+as the slow random `.bif` pairs:
 
 ```bash
-./tests/run_small.sh
+./tests/run_small.sh           # tiny cases plus 10–30s medium cases
+./tests/run_small.sh --fast    # tiny cases only
 PLAY_BIN=./build/play ./tests/run_small.sh
 ```
 
@@ -75,3 +76,66 @@ overestimate; refine is also checked on the smallest pairs.
 finite bar of length 51 and one infinite bar. `a0_anchors` is a single
 infinite bar (plus unused relation grades that only cut \(A_0\)). The
 infinite bars match at cost 0; the finite bar goes to the diagonal at 25.5.
+
+### Medium cases (about 10–30s each)
+
+These keep the same expected distances, but enlarge \(A_0\) (or use a real
+10-vertex 1-skeleton) so `--no-refine` spends time comparable to a small
+benchmark pair. Skip them with `--fast`.
+
+| Pair | Expected | Typical time | What it covers |
+| --- | --- | --- | --- |
+| `far_merge` vs `a0_anchors_medium` (140 unused grades) | 25.5 | ~19s | Same 25.5 vs 30 trap, with enough dual lines for unbounded faces to be thin |
+| `merge_horizontal_medium` vs `merge_vertical_medium` | 25 | ~19s | Type-III pair with ~140 distinct grades |
+| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 3 | ~16s | Real \(H_0\) 1-skeleton, same pipeline as the slow random `.bif` pairs |
+| `r_bif_v_10_…_sample_1` vs `sample_5` | 2.5 | ~13s | Same, different 10-vertex sample |
+
+Dummy relation columns in the `*_medium.scc` files are empty: they do not
+change the slice barcodes, only the arrangement.
+
+## Medium benchmark suite
+
+`run_medium.sh` is the 10–30s set for timing code tweaks. It includes the
+four medium cases above plus more synthetics and 10-vertex bifiltration
+pairs, and prints a TSV summary (`name`, `expected`, `got`, `seconds`,
+`status`).
+
+```bash
+./tests/run_medium.sh                 # --no-aida --no-refine (default)
+./tests/run_medium.sh --aida          # mpfree+AIDA, still --no-refine
+PLAY_BIN=./build/play ./tests/run_medium.sh --aida
+TIMEOUT_SEC=180 ./tests/run_medium.sh --aida
+```
+
+`--aida` drops `--no-aida` so play runs mpfree then AIDA. Dummy empty
+relation columns in the `*_medium.scc` files disappear under AIDA, which
+would shrink \(A_0\) to a few lines. The matching `*.bif` 1-skeleta put
+length-1 extra \(H_0\) bars at grades around \(x,y\ge 200\) (far from the
+length-40–60 features). Those bars survive mpfree+AIDA, keep \(A_0\) large,
+and cost 0.5 to unmatch, so the constructed distances stay the same.
+
+| Pair | Expected | Typical time |
+| --- | --- | --- |
+| `far_merge` vs `a0_anchors_medium` | 25.5 | ~19s |
+| `far_merge_41` vs `a0_anchors_medium` | 20.5 | ~19s |
+| `far_merge` vs `a0_anchors_grid` (10×10 dummy grades) | 25.5 | ~30s |
+| `merge_horizontal_medium` vs `merge_vertical_medium` (L=50) | 25 | ~19s |
+| `merge_h40_medium` vs `merge_v40_medium` | 20 | ~29s |
+| `merge_h60_medium` vs `merge_v60_medium` | 30 | ~28s |
+| v10 n50 samples 1 vs 2 | 3 | ~16s |
+| v10 n50 samples 1 vs 5 | 2.5 | ~13s |
+| v10 n50 samples 2 vs 8 | 3 | ~24s |
+| v10 n50 samples 3 vs 7 | 4.5 | ~26s |
+| v10 n50 samples 4 vs 9 | 6 | ~25s |
+| v10 n50 samples 7 vs 10 | 3 | ~26s |
+| v10 n50 samples 8 vs 10 | 3 | ~27s |
+
+Default is `--no-aida --no-refine` on the `.scc` synthetics (empty dummy
+columns) and the v10 `.bif` pairs. `--aida` switches the synthetics to the
+matching `.bif` files (`far_merge.bif`, `far_merge_41.bif`,
+`a0_anchors_medium.bif`, `a0_anchors_grid.bif`, `merge_*medium.bif`) and
+the same v10 pairs, still with `--no-refine`. Times in the table are from
+one `--no-aida` run; they move with CPU load but should stay in the same
+band. AIDA adds preprocess time and may change maximizer time because the
+presentation is minimal. The `--aida` grid stand-in is an 8×8 of real bars
+(the 10×10 dummy grid is too slow once the extra bars are in the barcode).
