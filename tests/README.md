@@ -9,7 +9,7 @@ matching distance **1**.
 ```
 
 The `.bif` pair is the same comparison as a 1-critical bifiltration: two
-vertices at (0, 0) and one edge at the death grade. The \(H_0\) presentation
+vertices at (0, 0) and one edge at the death grade. The $H_0$ presentation
 has two generators at the origin and one relation, so the diagrams also
 contain an infinite bar (the connected component). Those infinite bars match
 at cost 0; the finite bars still give matching distance 1.
@@ -66,20 +66,20 @@ overestimate; refine is also checked on the smallest pairs.
 | Pair | Expected | What it covers |
 | --- | --- | --- |
 | `interval_long` vs `interval_short` (`.scc` and `.bif`) | 1 | Rank-1 intervals, refine and not |
-| `far_merge` vs `a0_anchors` | 25.5 | Unbounded \(A_0\) faces with extra dual lines at \(x,y\in\{10,20,30\}\). A sample that leaves the face mixed those partitions with slope \(r=-30\) and reported 30 (or 51) instead of the diagonal cost of the length-51 bar |
-| `far_merge.bif` vs `a0_anchors.bif` | 25.5 | Same distance as a 1-critical \(H_0\) bifiltration |
-| `merge_horizontal` vs `merge_vertical` | 25 | Type-III slices. The Lemma-10 closed form \(c\|r+q_x\|\) on an outer \(A_0\) ray is 50; the true \(s\to+\infty\) bottleneck is 25 |
-| `free_one` vs `free_two` | infinity | Unmatched infinite bars, \(s>0\) |
-| `prism_1` vs `prism_2` `--dim 2 --no-aida` | infinity | Raw \(H_2\) presentations of the two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
+| `far_merge` vs `a0_anchors` | 25.5 | Unbounded $A_0$ faces with extra dual lines at $x,y\in\{10,20,30\}$. A sample that leaves the face mixed those partitions with slope $r=-30$ and reported 30 (or 51) instead of the diagonal cost of the length-51 bar |
+| `far_merge.bif` vs `a0_anchors.bif` | 25.5 | Same distance as a 1-critical $H_0$ bifiltration |
+| `merge_horizontal` vs `merge_vertical` | 25 | Type-III slices. The Lemma-10 closed form $c\|r+q_x\|$ on an outer $A_0$ ray is 50; the true $s\to+\infty$ bottleneck is 25 |
+| `free_one` vs `free_two` | infinity | Unmatched infinite bars, $s>0$ |
+| `prism_1` vs `prism_2` `--dim 2 --no-aida` | infinity | Raw $H_2$ presentations of the two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
 
-`far_merge` is two generators at the origin killed together at \((51,0)\): one
+`far_merge` is two generators at the origin killed together at $(51,0)$: one
 finite bar of length 51 and one infinite bar. `a0_anchors` is a single
-infinite bar (plus unused relation grades that only cut \(A_0\)). The
+infinite bar (plus unused relation grades that only cut $A_0$). The
 infinite bars match at cost 0; the finite bar goes to the diagonal at 25.5.
 
 ### Medium cases (about 10–30s each)
 
-These keep the same expected distances, but enlarge \(A_0\) (or use a real
+These keep the same expected distances, but enlarge $A_0$ (or use a real
 10-vertex 1-skeleton) so `--no-refine` spends time comparable to a small
 benchmark pair. Skip them with `--fast`.
 
@@ -87,7 +87,7 @@ benchmark pair. Skip them with `--fast`.
 | --- | --- | --- | --- |
 | `far_merge` vs `a0_anchors_medium` (140 unused grades) | 25.5 | ~19s | Same 25.5 vs 30 trap, with enough dual lines for unbounded faces to be thin |
 | `merge_horizontal_medium` vs `merge_vertical_medium` | 25 | ~19s | Type-III pair with ~140 distinct grades |
-| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 3 | ~16s | Real \(H_0\) 1-skeleton, same pipeline as the slow random `.bif` pairs |
+| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 3 | ~16s | Real $H_0$ 1-skeleton, same pipeline as the slow random `.bif` pairs |
 | `r_bif_v_10_…_sample_1` vs `sample_5` | 2.5 | ~13s | Same, different 10-vertex sample |
 
 Dummy relation columns in the `*_medium.scc` files are empty: they do not
@@ -109,9 +109,9 @@ TIMEOUT_SEC=180 ./tests/run_medium.sh --aida
 
 `--aida` drops `--no-aida` so play runs mpfree then AIDA. Dummy empty
 relation columns in the `*_medium.scc` files disappear under AIDA, which
-would shrink \(A_0\) to a few lines. The matching `*.bif` 1-skeleta put
-length-1 extra \(H_0\) bars at grades around \(x,y\ge 200\) (far from the
-length-40–60 features). Those bars survive mpfree+AIDA, keep \(A_0\) large,
+would shrink $A_0$ to a few lines. The matching `*.bif` 1-skeleta put
+length-1 extra $H_0$ bars at grades around $x,y\ge 200$ (far from the
+length-40–60 features). Those bars survive mpfree+AIDA, keep $A_0$ large,
 and cost 0.5 to unmatch, so the constructed distances stay the same.
 
 | Pair | Expected | Typical time |
