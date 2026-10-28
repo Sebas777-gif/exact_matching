@@ -1,0 +1,13 @@
+scc2020
+2
+2 2 0
+# Direct sum of two intervals, an L in the plane:
+#   (1, 0) → (1, 2)  vertical
+#   (0, 2) → (3, 2)  horizontal
+# Against span.scc, d_match = 1.5 is attained at (s, t) = (1, 1/2),
+# which is interior to the A0 edge s = 1 between t = 0 and t = 1.
+# --no-refine only sees A0 vertices (F ≤ 1) and one open-face sample.
+1 2 ; 0
+3 2 ; 1
+1 0 ;
+0 2 ;

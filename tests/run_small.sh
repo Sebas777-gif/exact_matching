@@ -137,6 +137,30 @@ run_case "unmatched infinite bars" infinity \
 run_case "prism H_2 --no-aida" infinity \
     tests/prism_1.bif tests/prism_2.bif --dim 2 --no-aida --no-refine
 
+# Two intervals in an L vs one spanning interval. True max 1.5 sits at
+# (s, t) = (1, 1/2) on an A0 edge, not at an A0 vertex. Refine finds it;
+# --no-refine samples vertices (F ≤ 1) and one open-face point (~1.057).
+run_case "ell vs span refine" 1.5 \
+    tests/ell.scc tests/span.scc --no-aida
+{
+    printf '%-44s' "ell vs span --no-refine < 1.5"
+    start="$(date +%s.%N 2>/dev/null || date +%s)"
+    set +e
+    out="$(run_timeout "$PLAY_BIN" tests/ell.scc tests/span.scc --no-aida --no-refine 2>&1)"
+    status=$?
+    set -e
+    end="$(date +%s.%N 2>/dev/null || date +%s)"
+    elapsed="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')"
+    dist="$(printf '%s\n' "$out" | awk '/^Matching distance:/{d=$3} END{print d}')"
+    if [[ "$status" -eq 0 ]] && awk -v g="$dist" 'BEGIN { exit (g+0==g && g < 1.5 - 1e-6 && g >= 0) ? 0 : 1 }'; then
+        echo "ok  $dist  (${elapsed}s)"
+        passed=$((passed + 1))
+    else
+        echo "FAIL got '$dist' expected < 1.5  (${elapsed}s)"
+        failed=$((failed + 1))
+    fi
+}
+
 if [[ "$FAST" -eq 0 ]]; then
     echo
     echo "Medium cases (about 10–30s each):"

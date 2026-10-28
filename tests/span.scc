@@ -1,0 +1,6 @@
+scc2020
+2
+1 1 0
+# One interval (0, 0) → (3, 2). Pair with ell.scc.
+3 2 ; 0
+0 0 ;

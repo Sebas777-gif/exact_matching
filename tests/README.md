@@ -71,6 +71,20 @@ overestimate; refine is also checked on the smallest pairs.
 | `merge_horizontal` vs `merge_vertical` | 25 | Type-III slices. The Lemma-10 closed form $c\|r+q_x\|$ on an outer $A_0$ ray is 50; the true $s\to+\infty$ bottleneck is 25 |
 | `free_one` vs `free_two` | infinity | Unmatched infinite bars, $s>0$ |
 | `prism_1` vs `prism_2` `--dim 2 --no-aida` | infinity | Raw $H_2$ presentations of the two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
+| `ell` vs `span` refine | 1.5 | Comparison vertex on the $A_0$ edge $s=1$, $t=1/2$. `--no-refine` reports ~1.057 (open-face sample); $A_0$ vertices only reach 1 |
+
+`ell.scc` is two intervals forming an L: $(1,0)\to(1,2)$ and $(0,2)\to(3,2)$.
+`span.scc` is one interval $(0,0)\to(3,2)$. $A_0$ has nine vertices; on
+$s=1$ they sit at $t\in\{-1,0,1,2\}$. Between $t=0$ and $t=1$, $F$
+rises to $3/2$ (span's bar has weighted length 3 and goes to the diagonal;
+cross-matches with the L bars are no cheaper). That point is a vertex of
+$A$ (comparison line $\cap$ the $A_0$ line $s=1$) and is not a
+vertex of $A_0$, so `--no-refine` misses it.
+
+```bash
+./play --no-aida --no-refine tests/ell.scc tests/span.scc   # ~1.057
+./play --no-aida tests/ell.scc tests/span.scc               # 1.5
+```
 
 `far_merge` is two generators at the origin killed together at $(51,0)$: one
 finite bar of length 51 and one infinite bar. `a0_anchors` is a single
