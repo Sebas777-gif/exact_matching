@@ -1,0 +1,22 @@
+bifiltration_phat_like
+19
+# Two origin vertices merging at (0, 40), plus 8 length-1 H_0 bars on the x-axis (star into the origin, offset 200). Pair with aida_mh8_40.bif; constructed d_match is 40/2.
+0 0 0
+0 0 0
+0 200 0
+0 203 0
+0 206 0
+0 209 0
+0 212 0
+0 215 0
+0 218 0
+0 221 0
+1 0 40 0 1
+1 201 0 0 2
+1 204 0 0 3
+1 207 0 0 4
+1 210 0 0 5
+1 213 0 0 6
+1 216 0 0 7
+1 219 0 0 8
+1 222 0 0 9

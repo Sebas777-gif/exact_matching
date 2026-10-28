@@ -15,17 +15,28 @@
 // The parameter plane is subdivided by the coarse arrangement A0: the dual
 // line of every input grade, plus the verticals s = 0 and s = 1. On each
 // cell of A0 the combinatorial type of F is constant except across
-// comparison lines of the realizing pair. Those lines are intersected per
-// face (O(n²) of them) rather than inserted into one global O(n⁴)
-// arrangement, which does not fit in memory.
+// comparison lines of the realizing pair.
 //
-// maximize_F walks A0 vertices, true s → +∞ limits on unbounded outer
-// cells, and optionally the per-face comparison vertices (refine = false
-// skips that last step).
+// maximize_F samples F at A0 vertices, a true interior point of each face,
+// s → +∞ limits, and (if refine) finite-edge midpoints plus a few extra
+// interior points, giving a lower bound δ. Each bounded A0 face then gets
+// the Kerber–Nigmetov variation bound
+//     U(f) = F(center) + v(M, f) + v(N, f),
+// with v the max change of a weighted push over the vertices of f.
+// Extrema of wpush sit at vertices: ∂/∂t of (y−t)/s is never zero, and the
+// restriction to a straight edge is monotonic. Unbounded faces have
+// infinite diameter and stay red. Green faces (U(f) ≤ δ) are skipped.
+//
+// On each remaining red face, comparison lines of the current realizing
+// pair (O(n²), never the global O(n⁴) overlay) are shuffled and inserted
+// incrementally into a local arrangement of that face. New vertices update
+// δ; split subfaces with U ≤ δ are marked green; green–green edges are
+// deleted. `--no-refine` stops after the A0 sample.
 
 #include <algorithm>
 #include <functional>
 #include <iostream>
+#include <random>
 #include <set>
 #include <utility>
 #include <vector>
@@ -39,6 +50,7 @@
 #include <CGAL/Arr_linear_traits_2.h>
 #include <CGAL/Arrangement_2.h>
 #include <CGAL/Arr_enums.h>
+#include <CGAL/Arr_extended_dcel.h>
 #include <CGAL/Arr_naive_point_location.h>
 #include <CGAL/intersections.h>
 #include <CGAL/number_utils.h>
@@ -51,9 +63,15 @@ typedef CGAL::Arr_linear_traits_2<Kernel> Traits_2;
 typedef Traits_2::Point_2 Point_2;   // (s, t) in slice-parameter space
 typedef Traits_2::Line_2 Line_2;     // a s + b t + c = 0
 typedef Traits_2::Ray_2 Ray_2;
+typedef Traits_2::Segment_2 Segment_2;
 typedef Traits_2::Vector_2 Vector_2;
 typedef Traits_2::X_monotone_curve_2 X_monotone_curve_2;
 typedef CGAL::Arrangement_2<Traits_2> Arrangement_2;
+// Local overlay of one A0 face: face data is FACE_RED or FACE_GREEN.
+typedef CGAL::Arr_face_extended_dcel<Traits_2, int> Face_colored_dcel;
+typedef CGAL::Arrangement_2<Traits_2, Face_colored_dcel> Colored_arrangement;
+const int FACE_RED = 0;
+const int FACE_GREEN = 1;
 
 // Bigrade in the module's (x, y) plane.
 struct Grade2 {
@@ -689,10 +707,11 @@ inline FT pair_coeff(const LabeledGrade& a, const LabeledGrade& b) {
   return (a.module == b.module) ? FT(1) / FT(2) : FT(1);
 }
 
-template<typename PL>
-inline bool in_face_interior(const PL& pl, Arrangement_2::Face_const_handle f, const Point_2& pt) {
+template<typename PL, typename FaceHandle>
+inline bool in_face_interior(const PL& pl, FaceHandle f, const Point_2& pt) {
   const auto obj = pl.locate(pt);
-  using FH = Arrangement_2::Face_const_handle;
+  // locate() stores const handles; a mutable Face_handle is a different type.
+  using FH = typename PL::Face_const_handle;
   if (const FH* fp = std::get_if<FH>(&obj)) return *fp == f;
   return false;
 }
@@ -704,7 +723,8 @@ inline Vector_2 l1_unit(const Vector_2& v) {
 
 // Direction of h from source to target, using the supporting line (works
 // when one or both ends sit at infinity).
-inline Vector_2 oriented_halfedge_dir(Arrangement_2::Halfedge_const_handle h) {
+template<typename HalfedgeHandle>
+inline Vector_2 oriented_halfedge_dir(HalfedgeHandle h) {
   Vector_2 dir = h->curve().supporting_line().to_vector();
   if (dir.x() < FT(0) || (dir.x() == FT(0) && dir.y() < FT(0)))
     dir = -dir;
@@ -719,8 +739,8 @@ inline Vector_2 oriented_halfedge_dir(Arrangement_2::Halfedge_const_handle h) {
 // proportional to ln.point(1) on unbounded edges were large enough to
 // land in a neighbouring cell; evaluate_F_s_infinity then mixed that
 // cell's above/below split with this face's outer slopes and overestimated.
-template<typename PL>
-inline bool face_interior_point(const PL& pl, Arrangement_2::Face_const_handle f, Point_2& out) {
+template<typename PL, typename FaceHandle>
+inline bool face_interior_point(const PL& pl, FaceHandle f, Point_2& out) {
   if (f->is_fictitious()) return false;
 
   static const int k_off[] = {8, 32, 128, 512, 2048, 8192, 32768, 131072, 524288};
@@ -739,8 +759,8 @@ inline bool face_interior_point(const PL& pl, Arrangement_2::Face_const_handle f
     return false;
   };
 
-  auto try_ccb = [&](Arrangement_2::Ccb_halfedge_const_circulator circ) -> bool {
-    Arrangement_2::Ccb_halfedge_const_circulator curr = circ;
+  auto try_ccb = [&](auto circ) -> bool {
+    auto curr = circ;
     do {
       if (curr->is_fictitious()) {
         ++curr;
@@ -932,12 +952,12 @@ inline bool line_intersection_point(const Line_2& a, const Line_2& b, Point_2& o
 // True if pt lies in the closed face (interior, a bounding vertex, or a
 // bounding edge). Comparison-line intersections on the boundary still
 // belong to the cell for maximization.
-template<typename PL>
-inline bool in_face_closure(const PL& pl, Arrangement_2::Face_const_handle f, const Point_2& pt) {
+template<typename PL, typename FaceHandle>
+inline bool in_face_closure(const PL& pl, FaceHandle f, const Point_2& pt) {
   const auto obj = pl.locate(pt);
-  using FH = Arrangement_2::Face_const_handle;
-  using VH = Arrangement_2::Vertex_const_handle;
-  using EH = Arrangement_2::Halfedge_const_handle;
+  using FH = typename PL::Face_const_handle;
+  using VH = typename PL::Vertex_const_handle;
+  using EH = typename PL::Halfedge_const_handle;
   if (const FH* fp = std::get_if<FH>(&obj)) return *fp == f;
   if (const VH* vp = std::get_if<VH>(&obj)) {
     const VH v = *vp;
@@ -1006,10 +1026,438 @@ inline void unique_lines(std::vector<Line_2>& lines) {
   lines.swap(u);
 }
 
-// Section 5: d_match = max F over A0. Vertices of A0, true s → +∞ limits
-// on right-unbounded cells with s ≥ 1, and (if refine) vertices cut by the
-// current witness's comparison lines inside each face. Returns infinite_F()
-// if some slice with s > 0 has unmatched infinite bars.
+template<typename FaceHandle, typename Fn>
+inline void for_each_face_halfedge(FaceHandle f, Fn&& fn) {
+  auto walk = [&](auto circ) {
+    auto curr = circ;
+    do {
+      fn(curr);
+      ++curr;
+    } while (curr != circ);
+  };
+  if (f->has_outer_ccb()) {
+    for (auto it = f->outer_ccbs_begin(); it != f->outer_ccbs_end(); ++it) walk(*it);
+  }
+  for (auto it = f->inner_ccbs_begin(); it != f->inner_ccbs_end(); ++it) walk(*it);
+}
+
+template<typename FaceHandle>
+inline void face_finite_vertices(FaceHandle f, std::vector<Point_2>& verts) {
+  verts.clear();
+  for_each_face_halfedge(f, [&](auto h) {
+    if (h->source()->is_at_open_boundary()) return;
+    const Point_2& p = h->source()->point();
+    if (p.x() < FT(0)) return;
+    verts.push_back(p);
+  });
+}
+
+template<typename FaceHandle>
+inline void face_boundary_curves(FaceHandle f, std::vector<X_monotone_curve_2>& curves) {
+  curves.clear();
+  for_each_face_halfedge(f, [&](auto h) {
+    if (!h->is_fictitious()) curves.push_back(h->curve());
+  });
+}
+
+// Max change of a weighted push of any grade of Mod over the given vertices.
+// On an A0 cell the above/below partition is constant and s = 1 is a wall, so
+// each wpush is (y−t)/s, y−t, s x, or constant. None of those has an interior
+// critical point on a convex polygon, and each is monotonic on a straight
+// edge, so vertex values give the exact variation (KN L-bound, Lemma 2).
+inline FT module_variation(const Module& Mod, const std::vector<Point_2>& verts) {
+  if (verts.empty()) return FT(0);
+  FT vmax = FT(0);
+  auto acc = [&](const Grade2& g) {
+    FT lo = weighted_grade(g, verts[0].x(), verts[0].y());
+    FT hi = lo;
+    for (std::size_t i = 1; i < verts.size(); ++i) {
+      const FT w = weighted_grade(g, verts[i].x(), verts[i].y());
+      if (w < lo) lo = w;
+      if (w > hi) hi = w;
+    }
+    const FT v = hi - lo;
+    if (v > vmax) vmax = v;
+  };
+  for (const Presentation& P : Mod.summands) {
+    for (const Grade2& g : P.generators) acc(g);
+    for (const Grade2& g : P.relations) acc(g);
+  }
+  return vmax;
+}
+
+inline bool kn_face_upper_bound(const Module& M, const Module& N,
+                                const FT& F_center,
+                                const std::vector<Point_2>& verts,
+                                FT& ub) {
+  if (is_infinite_F(F_center) || verts.size() < 2) return false;
+  ub = F_center + module_variation(M, verts) + module_variation(N, verts);
+  return true;
+}
+
+inline bool face_centroid(const std::vector<Point_2>& verts, Point_2& out) {
+  if (verts.size() < 3) return false;
+  FT sx = FT(0), sy = FT(0);
+  for (const Point_2& p : verts) {
+    sx += p.x();
+    sy += p.y();
+  }
+  const FT n = FT(static_cast<int>(verts.size()));
+  out = Point_2(sx / n, sy / n);
+  return out.x() > FT(0);
+}
+
+template<typename HalfedgeHandle>
+inline bool point_on_halfedge(HalfedgeHandle h, const Point_2& ip) {
+  const X_monotone_curve_2& cv = h->curve();
+  if (cv.is_segment()) return cv.segment().has_on(ip);
+  if (cv.is_ray()) return cv.ray().has_on(ip);
+  if (cv.is_line()) return cv.line().has_on(ip);
+  return false;
+}
+
+template<typename HalfedgeHandle>
+inline bool point_on_or_left(HalfedgeHandle h, const Point_2& pt) {
+  const Vector_2 dir = oriented_halfedge_dir(h);
+  Point_2 base;
+  if (!h->source()->is_at_open_boundary()) base = h->source()->point();
+  else if (!h->target()->is_at_open_boundary()) base = h->target()->point();
+  else base = h->curve().supporting_line().point(0);
+  const Vector_2 w = pt - base;
+  return dir.x() * w.y() - dir.y() * w.x() >= FT(0);
+}
+
+// A0 cells and red subcells of a line overlay are convex, with the face on
+// the left of every bounding halfedge.
+template<typename FaceHandle>
+inline bool point_in_convex_face(FaceHandle f, const Point_2& pt) {
+  bool any = false;
+  bool ok = true;
+  for_each_face_halfedge(f, [&](auto h) {
+    if (h->is_fictitious()) return;
+    any = true;
+    if (!point_on_or_left(h, pt)) ok = false;
+  });
+  return any && ok;
+}
+
+inline FT line_param(const Line_2& L, const Point_2& p) {
+  const Vector_2 d = L.to_vector();
+  const Vector_2 w = p - L.point(0);
+  const FT den = d.x() * d.x() + d.y() * d.y();
+  if (den == FT(0)) return FT(0);
+  return (d.x() * w.x() + d.y() * w.y()) / den;
+}
+
+// L ∩ f as one segment, ray, or line. Convex faces give at most one piece.
+template<typename FaceHandle>
+inline void clip_line_to_face(FaceHandle f, const Line_2& L,
+                              std::vector<X_monotone_curve_2>& pieces) {
+  if (is_degenerate_line(L)) return;
+  std::vector<std::pair<FT, Point_2> > hits;
+  bool coincident = false;
+  for_each_face_halfedge(f, [&](auto h) {
+    if (h->is_fictitious() || coincident) return;
+    const Line_2 e = h->curve().supporting_line();
+    if (CGAL::parallel(L, e) && L.has_on(e.point(0))) {
+      coincident = true;
+      return;
+    }
+    Point_2 ip;
+    if (!line_intersection_point(L, e, ip)) return;
+    if (!point_on_halfedge(h, ip)) return;
+    hits.push_back(std::make_pair(line_param(L, ip), ip));
+  });
+  if (coincident) return;
+
+  std::sort(hits.begin(), hits.end(),
+            [](const std::pair<FT, Point_2>& a, const std::pair<FT, Point_2>& b) {
+              return a.first < b.first;
+            });
+  std::vector<std::pair<FT, Point_2> > uniq;
+  for (const auto& h : hits) {
+    if (!uniq.empty() && uniq.back().second == h.second) continue;
+    uniq.push_back(h);
+  }
+  hits.swap(uniq);
+
+  if (hits.size() >= 2) {
+    const Point_2& a = hits.front().second;
+    const Point_2& b = hits.back().second;
+    if (a != b) pieces.push_back(X_monotone_curve_2(Segment_2(a, b)));
+    return;
+  }
+
+  const Vector_2 dir = L.to_vector();
+  const Vector_2 u = l1_unit(dir);
+  if (u.x() == FT(0) && u.y() == FT(0)) return;
+
+  auto step_inside = [&](const Point_2& base, const Vector_2& step) -> bool {
+    static const int k_off[] = {8, 32, 128, 512, 2048};
+    for (int k : k_off) {
+      if (point_in_convex_face(f, base + step / FT(k))) return true;
+    }
+    return false;
+  };
+
+  if (hits.size() == 1) {
+    const Point_2& p = hits[0].second;
+    const bool plus = step_inside(p, u);
+    const bool minus = step_inside(p, -u);
+    if (plus && minus) pieces.push_back(X_monotone_curve_2(L));
+    else if (plus) pieces.push_back(X_monotone_curve_2(Ray_2(p, dir)));
+    else if (minus) pieces.push_back(X_monotone_curve_2(Ray_2(p, -dir)));
+    return;
+  }
+
+  Point_2 test;
+  bool have = false;
+  if (L.b() != FT(0)) {
+    test = Point_2(FT(1), -(L.a() + L.c()) / L.b());
+    have = true;
+  } else if (L.a() != FT(0)) {
+    const FT s = -L.c() / L.a();
+    if (s > FT(0)) {
+      test = Point_2(s, FT(0));
+      have = true;
+    }
+  }
+  if (have && point_in_convex_face(f, test))
+    pieces.push_back(X_monotone_curve_2(L));
+}
+
+inline bool local_has_red(const Colored_arrangement& local) {
+  for (auto fit = local.faces_begin(); fit != local.faces_end(); ++fit) {
+    if (fit->is_fictitious()) continue;
+    if (fit->data() == FACE_RED) return true;
+  }
+  return false;
+}
+
+inline void merge_green_green(Colored_arrangement& local) {
+  for (;;) {
+    bool killed = false;
+    for (auto eit = local.edges_begin(); eit != local.edges_end(); ++eit) {
+      if (eit->face()->is_fictitious() || eit->twin()->face()->is_fictitious())
+        continue;
+      if (eit->face()->data() == FACE_GREEN &&
+          eit->twin()->face()->data() == FACE_GREEN) {
+        local.remove_edge(eit);
+        killed = true;
+        break;
+      }
+    }
+    if (!killed) return;
+  }
+}
+
+inline bool init_local_from_a0_face(Colored_arrangement& local,
+                                    Arrangement_2::Face_const_handle a0,
+                                    const Point_2& interior) {
+  std::vector<X_monotone_curve_2> curves;
+  face_boundary_curves(a0, curves);
+  if (curves.empty()) return false;
+  CGAL::insert(local, curves.begin(), curves.end());
+  CGAL::Arr_naive_point_location<Colored_arrangement> lpl(local);
+  Colored_arrangement::Face_handle red = local.faces_begin();
+  bool found = false;
+  for (auto fit = local.faces_begin(); fit != local.faces_end(); ++fit) {
+    if (fit->is_fictitious()) continue;
+    fit->set_data(FACE_GREEN);
+    if (in_face_interior(lpl, fit, interior)) {
+      red = fit;
+      found = true;
+    }
+  }
+  if (!found) return false;
+  red->set_data(FACE_RED);
+  return true;
+}
+
+template<typename Consider>
+inline void recolor_local_faces(Colored_arrangement& local,
+                                const Module& M, const Module& N,
+                                const FT& best,
+                                Consider& consider_F,
+                                bool& infinite) {
+  CGAL::Arr_naive_point_location<Colored_arrangement> lpl(local);
+  for (auto fit = local.faces_begin(); fit != local.faces_end(); ++fit) {
+    if (fit->is_fictitious() || fit->data() == FACE_GREEN) continue;
+    // Unbounded subfaces can have infinite wpush variation (vertical
+    // t → ±∞ rays); they stay red until a later split bounds them.
+    if (fit->is_unbounded()) continue;
+    Point_2 ip;
+    if (!face_interior_point(lpl, fit, ip)) continue;
+    if (ip.x() <= FT(0)) {
+      fit->set_data(FACE_GREEN);
+      continue;
+    }
+    Witness w;
+    const FT fc = evaluate_F(M, N, ip.x(), ip.y(), &w);
+    consider_F(ip.x(), fc);
+    if (infinite) return;
+    if (is_infinite_F(fc)) continue;
+    std::vector<Point_2> verts;
+    face_finite_vertices(fit, verts);
+    FT ub;
+    if (kn_face_upper_bound(M, N, fc, verts, ub) && !(best < ub))
+      fit->set_data(FACE_GREEN);
+  }
+}
+
+// Previous all-pairs intersection of a witness's comparison lines in one
+// A0 face. Used if the local overlay of that face cannot be built.
+template<typename Consider>
+inline void refine_face_pairwise(
+    Arrangement_2::Face_const_handle f,
+    const Point_2& interior,
+    const std::vector<Witness>& seeds,
+    const Module& M, const Module& N,
+    const std::vector<LabeledGrade>& grades,
+    const CGAL::Arr_naive_point_location<Arrangement_2>& pl,
+    Consider& consider_F,
+    bool& infinite) {
+  std::set<PairKey> seen;
+  std::vector<Witness> queue;
+  for (const Witness& w : seeds) {
+    if (!w.valid) continue;
+    if (seen.insert(make_pair_key(w)).second) queue.push_back(w);
+  }
+  if (queue.empty()) return;
+
+  std::vector<Line_2> boundary;
+  face_supporting_lines(f, boundary);
+
+  for (std::size_t qi = 0; qi < queue.size(); ++qi) {
+    const Witness w = queue[qi];
+    std::vector<Line_2> lines;
+    comparison_lines_for_witness(lines, w, grades, interior.x(), interior.y());
+    unique_lines(lines);
+
+    auto consider_pt = [&](const Point_2& pt) {
+      if (infinite) return;
+      if (pt.x() < FT(0)) return;
+      if (!in_face_closure(pl, f, pt)) return;
+      Witness w2;
+      consider_F(pt.x(), evaluate_F(M, N, pt.x(), pt.y(), &w2));
+      if (infinite || !w2.valid) return;
+      if (seen.insert(make_pair_key(w2)).second) queue.push_back(w2);
+    };
+
+    const int nl = static_cast<int>(lines.size());
+    for (int i = 0; i < nl; ++i) {
+      for (int j = i + 1; j < nl; ++j) {
+        Point_2 ip;
+        if (line_intersection_point(lines[i], lines[j], ip)) consider_pt(ip);
+      }
+      for (const Line_2& e : boundary) {
+        Point_2 ip;
+        if (line_intersection_point(lines[i], e, ip)) consider_pt(ip);
+      }
+    }
+    if (infinite) return;
+  }
+}
+
+// Shuffle the current witness's comparison lines and insert them one at a
+// time into a local overlay of this A0 face. Skip a line whose zone is
+// entirely green. Boundary hits of a red split raise δ; new subfaces with
+// U ≤ δ turn green; green–green edges are deleted. New realizing pairs
+// enqueue their own O(n²) lines. Never materializes the global O(n⁴) list.
+template<typename Consider>
+inline void refine_red_a0_face(
+    Arrangement_2::Face_const_handle a0_face,
+    const Point_2& interior,
+    const std::vector<Witness>& seeds,
+    const Module& M, const Module& N,
+    const std::vector<LabeledGrade>& grades,
+    const CGAL::Arr_naive_point_location<Arrangement_2>& pl,
+    bool has_a0_ub, const FT& a0_ub,
+    Consider& consider_F,
+    FT& best,
+    bool& infinite) {
+  Colored_arrangement local;
+  if (!init_local_from_a0_face(local, a0_face, interior)) {
+    refine_face_pairwise(a0_face, interior, seeds, M, N, grades, pl,
+                         consider_F, infinite);
+    return;
+  }
+
+  std::set<PairKey> seen;
+  std::vector<Line_2> pending;
+  std::vector<Line_2> used;
+  std::mt19937 rng(1);
+
+  auto enqueue_witness_lines = [&](const Witness& w) {
+    if (!w.valid) return;
+    std::vector<Line_2> lines;
+    comparison_lines_for_witness(lines, w, grades, interior.x(), interior.y());
+    unique_lines(lines);
+    std::shuffle(lines.begin(), lines.end(), rng);
+    for (const Line_2& L : lines) unique_add_line(pending, L);
+  };
+
+  for (const Witness& w : seeds) {
+    if (!w.valid) continue;
+    if (seen.insert(make_pair_key(w)).second) enqueue_witness_lines(w);
+  }
+
+  auto a0_already_green = [&]() {
+    return has_a0_ub && !(best < a0_ub);
+  };
+
+  auto eval_hit = [&](const Point_2& pt) {
+    if (infinite || pt.x() < FT(0)) return;
+    Witness w2;
+    consider_F(pt.x(), evaluate_F(M, N, pt.x(), pt.y(), &w2));
+    if (infinite || !w2.valid) return;
+    if (seen.insert(make_pair_key(w2)).second) enqueue_witness_lines(w2);
+  };
+
+  while (!pending.empty() && !infinite) {
+    if (a0_already_green()) break;
+    if (!local_has_red(local)) break;
+
+    const Line_2 L = pending.back();
+    pending.pop_back();
+    bool already = false;
+    for (const Line_2& e : used) {
+      if (same_line(e, L)) {
+        already = true;
+        break;
+      }
+    }
+    if (already) continue;
+    used.push_back(L);
+
+    std::vector<X_monotone_curve_2> pieces;
+    for (auto fit = local.faces_begin(); fit != local.faces_end(); ++fit) {
+      if (fit->is_fictitious() || fit->data() != FACE_RED) continue;
+      clip_line_to_face(fit, L, pieces);
+    }
+    if (pieces.empty()) continue;
+
+    for (const X_monotone_curve_2& cv : pieces) {
+      if (cv.is_segment()) {
+        eval_hit(cv.segment().source());
+        eval_hit(cv.segment().target());
+      } else if (cv.is_ray()) {
+        eval_hit(cv.ray().source());
+      }
+    }
+    if (infinite) return;
+
+    CGAL::insert(local, pieces.begin(), pieces.end());
+    recolor_local_faces(local, M, N, best, consider_F, infinite);
+    if (infinite) return;
+    merge_green_green(local);
+  }
+}
+
+// Section 5: d_match = max F. Sample A0, prune green bounded faces with the
+// KN variation bound, then incrementally insert A \ A0 on the faces that
+// stay red. Returns infinite_F() if some slice with s > 0 has unmatched
+// infinite bars.
 inline FT maximize_F(const Arrangement_2& arr,
                      const Module& M,
                      const Module& N,
@@ -1045,9 +1493,36 @@ inline FT maximize_F(const Arrangement_2& arr,
     if (infinite) return infinite_F();
   }
 
+  // Midpoints of finite A0 edges. Cheap extra samples on the refine path;
+  // the maximizer of F on an A0 edge can sit between vertices (ell vs span
+  // at s = 1, t = 1/2). `--no-refine` skips them, so it can still miss.
+  if (refine) {
+    for (auto eit = arr.edges_begin(); eit != arr.edges_end(); ++eit) {
+      if (eit->source()->is_at_open_boundary()) continue;
+      if (eit->target()->is_at_open_boundary()) continue;
+      const Point_2 m = CGAL::midpoint(eit->source()->point(),
+                                      eit->target()->point());
+      if (m.x() < FT(0)) continue;
+      consider_F(m.x(), evaluate_F(M, N, m.x(), m.y()));
+      if (infinite) return infinite_F();
+    }
+  }
+
   CGAL::Arr_naive_point_location<Arrangement_2> pl(arr);
   std::vector<LabeledGrade> grades;
   collect_labeled_grades(M, N, grades);
+
+  struct FaceWork {
+    Arrangement_2::Face_const_handle f;
+    Point_2 interior;
+    std::vector<Witness> seeds;
+    std::vector<Point_2> verts;
+    FT F_center;
+    FT ub;
+    bool unbounded;
+    bool has_ub;
+  };
+  std::vector<FaceWork> works;
 
   for (auto fit = arr.faces_begin(); fit != arr.faces_end(); ++fit) {
     if (fit->is_fictitious()) continue;
@@ -1055,9 +1530,40 @@ inline FT maximize_F(const Arrangement_2& arr,
     if (!face_interior_point(pl, fit, interior)) continue;
     if (interior.x() <= FT(0)) continue;
 
+    FaceWork work;
+    work.f = fit;
+    work.interior = interior;
+    work.unbounded = fit->is_unbounded();
+    face_finite_vertices(fit, work.verts);
+
     Witness w0;
-    consider_F(interior.x(), evaluate_F(M, N, interior.x(), interior.y(), &w0));
+    work.F_center = evaluate_F(M, N, interior.x(), interior.y(), &w0);
+    consider_F(interior.x(), work.F_center);
     if (infinite) return infinite_F();
+    if (w0.valid) work.seeds.push_back(w0);
+
+    // Extra interior samples on bounded cells, refine path only. The
+    // centroid of a convex A0 face is inside; one more convex combination
+    // of vertices is a cheap extra (λ, μ)-style probe.
+    if (refine && !work.unbounded && work.verts.size() >= 3) {
+      Point_2 c;
+      if (face_centroid(work.verts, c) && point_in_convex_face(fit, c)) {
+        Witness wc;
+        consider_F(c.x(), evaluate_F(M, N, c.x(), c.y(), &wc));
+        if (infinite) return infinite_F();
+        if (wc.valid) work.seeds.push_back(wc);
+      }
+      const Point_2& a = work.verts.front();
+      const Point_2& b = work.verts[work.verts.size() / 2];
+      const Point_2 p((a.x() + a.x() + b.x()) / FT(3),
+                      (a.y() + a.y() + b.y()) / FT(3));
+      if (p.x() > FT(0) && point_in_convex_face(fit, p)) {
+        Witness wp;
+        consider_F(p.x(), evaluate_F(M, N, p.x(), p.y(), &wp));
+        if (infinite) return infinite_F();
+        if (wp.valid) work.seeds.push_back(wp);
+      }
+    }
 
     // s → +∞ along each right-unbounded outer ray of this A0 face.
     // Do not use the paper's c|r + q_x| for the interior witness: on A0
@@ -1065,7 +1571,7 @@ inline FT maximize_F(const Arrangement_2& arr,
     // closed form then overestimates (often a large integer |q_x − v_x|).
     // The limiting bottleneck is one extra persistence computation per
     // ray, the same cost class as --no-refine.
-    if (fit->is_unbounded() && interior.x() >= FT(1)) {
+    if (work.unbounded && interior.x() >= FT(1)) {
       const std::vector<FT> slopes = right_unbounded_slopes(fit);
       for (const FT& r : slopes) {
         consider_F(interior.x(),
@@ -1074,51 +1580,22 @@ inline FT maximize_F(const Arrangement_2& arr,
       }
     }
 
-    if (!refine || !w0.valid) continue;
+    work.has_ub = false;
+    if (!work.unbounded && !is_infinite_F(work.F_center))
+      work.has_ub = kn_face_upper_bound(M, N, work.F_center, work.verts, work.ub);
+    works.push_back(work);
+  }
 
-    // Worklist of realizing pairs on this face. A new pair at a comparison
-    // vertex can cut further lines, so we keep going until no new pair
-    // appears (still only O(n²) lines per pair, never a global overlay).
-    std::set<PairKey> seen;
-    std::vector<Witness> queue;
-    queue.push_back(w0);
-    seen.insert(make_pair_key(w0));
+  if (!refine) return any ? best : FT(0);
 
-    std::vector<Line_2> boundary;
-    face_supporting_lines(fit, boundary);
-
-    for (std::size_t qi = 0; qi < queue.size(); ++qi) {
-      const Witness w = queue[qi];
-      std::vector<Line_2> lines;
-      comparison_lines_for_witness(lines, w, grades, interior.x(), interior.y());
-      unique_lines(lines);
-
-      auto consider_pt = [&](const Point_2& pt) {
-        if (infinite) return;
-        if (pt.x() < FT(0)) return;
-        if (!in_face_closure(pl, fit, pt)) return;
-        Witness w2;
-        consider_F(pt.x(), evaluate_F(M, N, pt.x(), pt.y(), &w2));
-        if (infinite || !w2.valid) return;
-        const PairKey key = make_pair_key(w2);
-        if (seen.insert(key).second) queue.push_back(w2);
-      };
-
-      // Intersect the witness's comparison lines with each other and with
-      // the face boundary; evaluate F at hits that lie in the closed cell.
-      const int nl = static_cast<int>(lines.size());
-      for (int i = 0; i < nl; ++i) {
-        for (int j = i + 1; j < nl; ++j) {
-          Point_2 ip;
-          if (line_intersection_point(lines[i], lines[j], ip)) consider_pt(ip);
-        }
-        for (const Line_2& e : boundary) {
-          Point_2 ip;
-          if (line_intersection_point(lines[i], e, ip)) consider_pt(ip);
-        }
-      }
-      if (infinite) return infinite_F();
-    }
+  for (FaceWork& work : works) {
+    if (infinite) return infinite_F();
+    // Green: U(f) ≤ δ, so f cannot beat the samples already in hand.
+    // Unbounded A0 faces have no finite KN bound and stay red.
+    if (work.has_ub && !(best < work.ub)) continue;
+    if (work.seeds.empty()) continue;
+    refine_red_a0_face(work.f, work.interior, work.seeds, M, N, grades, pl,
+                       work.has_ub, work.ub, consider_F, best, infinite);
   }
 
   return any ? best : FT(0);

@@ -136,9 +136,11 @@ Flags may appear before or after the file names.
 ```
 
 Small maximizer regressions are in `tests/run_small.sh` (`--fast` skips the
-10–30s cases). A larger 10–30s timing set is `tests/run_medium.sh`
-(`--aida` runs mpfree+AIDA on the matching `.bif` files); see
-`tests/README.md`.
+medium cases; `--no-refine` uses the $A_0$ sample only). A larger timing
+set is `tests/run_medium.sh` (`--aida` runs mpfree+AIDA; `--no-refine`
+skips comparison-line insertion); see `tests/README.md`. Both default to
+incremental refine. `--aida` without `--no-refine` uses 25 constructed
+`.bif` pairs sized for about 30–60s each.
 
 ## Output
 

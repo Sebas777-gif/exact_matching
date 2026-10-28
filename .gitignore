@@ -70,4 +70,5 @@ Testing/
 .vscode/
 tests/random_bifiltrations/
 tests/results.txt
+tests/refined_results.txt
 

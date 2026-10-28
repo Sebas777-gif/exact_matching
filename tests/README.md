@@ -55,13 +55,15 @@ shift by 1 in both coordinates to push (1, 1) onto (2, 2).
 as the slow random `.bif` pairs:
 
 ```bash
-./tests/run_small.sh           # tiny cases plus 10–30s medium cases
-./tests/run_small.sh --fast    # tiny cases only
+./tests/run_small.sh                 # incremental refine (default)
+./tests/run_small.sh --no-refine     # A0 sample only
+./tests/run_small.sh --fast          # tiny cases only
 PLAY_BIN=./build/play ./tests/run_small.sh
 ```
 
-Every case uses `--no-aida`. `--no-refine` is the path that used to
-overestimate; refine is also checked on the smallest pairs.
+Every case uses `--no-aida`. Default is the incremental $A\setminus A_0$
+path. `--no-refine` is the $A_0$ sample that used to overestimate and can
+still miss a comparison vertex. The ell vs span miss is always checked.
 
 | Pair | Expected | What it covers |
 | --- | --- | --- |
@@ -94,8 +96,8 @@ infinite bars match at cost 0; the finite bar goes to the diagonal at 25.5.
 ### Medium cases (about 10–30s each)
 
 These keep the same expected distances, but enlarge $A_0$ (or use a real
-10-vertex 1-skeleton) so `--no-refine` spends time comparable to a small
-benchmark pair. Skip them with `--fast`.
+10-vertex 1-skeleton). With `--no-refine` they run in about 10–30s; default
+incremental refine can take longer. Skip them with `--fast`.
 
 | Pair | Expected | Typical time | What it covers |
 | --- | --- | --- | --- |
@@ -115,10 +117,12 @@ pairs, and prints a TSV summary (`name`, `expected`, `got`, `seconds`,
 `status`).
 
 ```bash
-./tests/run_medium.sh                 # --no-aida --no-refine (default)
-./tests/run_medium.sh --aida          # mpfree+AIDA, still --no-refine
+./tests/run_medium.sh                 # --no-aida, incremental refine
+./tests/run_medium.sh --no-refine     # --no-aida, A0 sample only (10–30s)
+./tests/run_medium.sh --aida          # mpfree+AIDA, incremental refine (~30–60s synthetics)
+./tests/run_medium.sh --aida --no-refine
 PLAY_BIN=./build/play ./tests/run_medium.sh --aida
-TIMEOUT_SEC=180 ./tests/run_medium.sh --aida
+TIMEOUT_SEC=90 ./tests/run_medium.sh --aida
 ```
 
 `--aida` drops `--no-aida` so play runs mpfree then AIDA. Dummy empty
@@ -144,12 +148,39 @@ and cost 0.5 to unmatch, so the constructed distances stay the same.
 | v10 n50 samples 7 vs 10 | 3 | ~26s |
 | v10 n50 samples 8 vs 10 | 3 | ~27s |
 
-Default is `--no-aida --no-refine` on the `.scc` synthetics (empty dummy
-columns) and the v10 `.bif` pairs. `--aida` switches the synthetics to the
-matching `.bif` files (`far_merge.bif`, `far_merge_41.bif`,
-`a0_anchors_medium.bif`, `a0_anchors_grid.bif`, `merge_*medium.bif`) and
-the same v10 pairs, still with `--no-refine`. Times in the table are from
-one `--no-aida` run; they move with CPU load but should stay in the same
-band. AIDA adds preprocess time and may change maximizer time because the
-presentation is minimal. The `--aida` grid stand-in is an 8×8 of real bars
-(the 10×10 dummy grid is too slow once the extra bars are in the barcode).
+Default is `--no-aida` with incremental refine on the `.scc` synthetics
+(empty dummy columns) and the v10 `.bif` pairs. `--no-refine` is the
+10–30s $A_0$-sample timing band. `--aida --no-refine` switches the
+synthetics to the matching `.bif` files (`far_merge.bif`,
+`far_merge_41.bif`, `a0_anchors_medium.bif`, `a0_anchors_grid.bif`,
+`merge_*medium.bif`) and the same v10 pairs. Times in the table are from
+one `--no-aida --no-refine` run; they move with CPU load but should stay
+in the same band. AIDA adds preprocess time and may change maximizer time
+because the presentation is minimal. The `--aida` grid stand-in is an 8×8
+of real bars (the 10×10 dummy grid is too slow once the extra bars are in
+the barcode).
+
+`--aida` with incremental refine (the play default) does **not** use those
+140-anchor / merge-70 files: they take minutes once comparison lines are
+inserted. The suite switches to 25 constructed `.bif` pairs sized so
+AIDA+refine lands around 30–60s each (default timeout 90s for slack).
+v10 n50 pairs still run; with AIDA they finish in a few seconds.
+
+Extra $H_0$ bars are a **star into the origin** (offset 200, step 3).
+Isolated vertex-edge pairs each add an extra infinite bar, which sends
+$d_\mathrm{match}$ to infinity and makes `maximize_F` return immediately.
+Unmatch cost of a length-1 bar is 0.5, so the constructed distances stay
+$L/2$. Changing $L$ keeps runtime and changes the distance.
+
+| Pair | Expected | Typical AIDA+refine time |
+| --- | --- | --- |
+| `far_merge_L` vs `aida_xanc_K`, $L\in\{41,51,61,71,81\}$, $K\in\{33,34,35\}$ (15 pairs) | $L/2$ | ~30–45s |
+| `far_merge_L` vs `aida_yanc_K`, $L\in\{41,51,61\}$, $K\in\{21,22\}$ (6 pairs) | $L/2$ | ~40s |
+| `aida_mh8_L` vs `aida_mv8_L`, $L\in\{40,50,60,70\}$ (4 pairs) | $L/2$ | ~50–55s |
+
+`far_merge.bif` is $L=51$; `far_merge_41.bif` already existed;
+`far_merge_{61,71,81}.bif` are the same two-vertex merge at $(L,0)$.
+x-axis stars produce concurrent duals (fewer vertices, refine on unbounded
+wedges); y-axis stars produce more vertices, so a smaller $K$ hits the
+same band. Merge $K=8$ extras are y-axis on the horizontal module and
+x-axis on the vertical module.
