@@ -180,6 +180,22 @@ $L/2$. Changing $L$ keeps runtime and changes the distance.
 
 `far_merge.bif` is $L=51$; `far_merge_41.bif` already existed;
 `far_merge_{61,71,81}.bif` are the same two-vertex merge at $(L,0)$.
+
+## Finite random pairs
+
+`tests/results.txt` (dim 0, `--no-refine`) has 18 finite-distance pairs
+among the first 1577 unordered `random_bifiltrations` comparisons; the
+rest returned infinity in 1–3s. Those 18 took 3–104 minutes. Re-run just
+them with:
+
+```bash
+./finite_benchmarks.sh --old     # --no-aida --no-refine, as in results.txt
+./finite_benchmarks.sh --new     # AIDA + incremental refine (default)
+./finite_benchmarks.sh --aida --no-refine
+```
+
+Results go to `tests/finite_results_<mode>.txt`. Pairs are ordered by the
+old `--no-refine` time (shortest first). Ctrl+C keeps completed rows.
 x-axis stars produce concurrent duals (fewer vertices, refine on unbounded
 wedges); y-axis stars produce more vertices, so a smaller $K$ hits the
 same band. Merge $K=8$ extras are y-axis on the horizontal module and

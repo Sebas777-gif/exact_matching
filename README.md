@@ -140,7 +140,9 @@ medium cases; `--no-refine` uses the $A_0$ sample only). A larger timing
 set is `tests/run_medium.sh` (`--aida` runs mpfree+AIDA; `--no-refine`
 skips comparison-line insertion); see `tests/README.md`. Both default to
 incremental refine. `--aida` without `--no-refine` uses 25 constructed
-`.bif` pairs sized for about 30–60s each.
+`.bif` pairs sized for about 30–60s each. The 18 finite pairs from
+`tests/results.txt` are `./finite_benchmarks.sh` (`--old` is
+`--no-aida --no-refine`; `--new` is AIDA + refine).
 
 ## Output
 
