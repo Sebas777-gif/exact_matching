@@ -15,8 +15,9 @@
 #   ./tests/run_medium.sh --no-aida       # explicit default preprocess skip
 #   PLAY_BIN=./build/play ./tests/run_medium.sh --aida
 #   TIMEOUT_SEC=90 ./tests/run_medium.sh --aida
+#   HERA_BIN=/path/to/matching_dist ./tests/run_medium.sh
 #
-# Prints one line per case and a TSV summary.
+# Prints one line per case and a TSV summary (play and Hera).
 #
 # Default --no-aida uses dummy-grade .scc synthetics (empty relation
 # columns expand A0 only). --aida cannot keep those columns, so the
@@ -30,6 +31,7 @@ set -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAY_BIN="${PLAY_BIN:-$ROOT/build/play}"
+HERA_BIN="${HERA_BIN:-}"
 USE_AIDA=0
 NO_REFINE=0
 failed=0
@@ -52,8 +54,9 @@ Usage: $0 [--aida|--no-aida] [--no-refine]
                 the 140-anchor / merge-70 files, which take minutes to refine.
   --no-refine   A0 sample only. Default is incremental comparison-line refine
 
-Environment: PLAY_BIN (default $ROOT/build/play), TIMEOUT_SEC
-(default 60, or 30 with --no-refine, or 90 with --aida refine).
+Environment: PLAY_BIN (default $ROOT/build/play), HERA_BIN
+(matching_dist; auto-detected if unset), TIMEOUT_SEC (default 60,
+or 30 with --no-refine, or 90 with --aida refine).
 EOF
 }
 
@@ -92,10 +95,36 @@ if [[ ! -x "$PLAY_BIN" ]]; then
     exit 1
 fi
 
+if [[ -z "$HERA_BIN" ]]; then
+    for candidate in \
+        "$HOME/hera_aida_matching/extern/hera/build/matching/matching_dist" \
+        "$ROOT/../hera_aida_matching/extern/hera/build/matching/matching_dist" \
+        "$ROOT/../hera/build/matching/matching_dist"
+    do
+        if [[ -x "$candidate" ]]; then
+            HERA_BIN="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$HERA_BIN" ]] && command -v matching_dist >/dev/null 2>&1; then
+        HERA_BIN="$(command -v matching_dist)"
+    fi
+fi
+if [[ -z "$HERA_BIN" || ! -x "$HERA_BIN" ]]; then
+    echo "error: Hera matching_dist not found. Set HERA_BIN." >&2
+    exit 1
+fi
+
+HERA_TIMEOUT_SEC="${HERA_TIMEOUT_SEC:-30}"
+
 PLAY_OUT=""
+HERA_OUT=""
 cleanup() {
     if [[ -n "${PLAY_OUT}" && -f "${PLAY_OUT}" ]]; then
         rm -f "${PLAY_OUT}"
+    fi
+    if [[ -n "${HERA_OUT}" && -f "${HERA_OUT}" ]]; then
+        rm -f "${HERA_OUT}"
     fi
 }
 interrupted() {
@@ -104,7 +133,7 @@ interrupted() {
     echo "interrupted" >&2
     if [[ ${#rows[@]} -gt 0 ]]; then
         echo
-        printf '%s\n' $'name\texpected\tgot\tseconds\tstatus'
+        printf '%s\n' $'name\texpected\tgot\tseconds\tstatus\thera\thera_seconds'
         printf '%s\n' "${rows[@]}"
     fi
     exit 130
@@ -114,14 +143,59 @@ trap interrupted INT TERM
 
 # Foreground, not $(timeout ...): bash defers INT inside command
 # substitution, so Ctrl+C would otherwise finish the case and continue.
-run_play() {
-    PLAY_OUT="$(mktemp)"
+run_cmd() {
+    local outvar="$1" tsec="$2"
+    shift 2
+    local tmp
+    tmp="$(mktemp)"
+    printf -v "$outvar" '%s' "$tmp"
     if command -v timeout >/dev/null 2>&1; then
-        timeout --foreground --signal=KILL "${TIMEOUT_SEC}s" \
-            "$PLAY_BIN" "$@" >"$PLAY_OUT" 2>&1
+        timeout --foreground --signal=KILL "${tsec}s" \
+            "$@" >"$tmp" 2>&1
     else
-        "$PLAY_BIN" "$@" >"$PLAY_OUT" 2>&1
+        "$@" >"$tmp" 2>&1
     fi
+}
+
+run_play() {
+    run_cmd PLAY_OUT "$TIMEOUT_SEC" "$PLAY_BIN" "$@"
+}
+
+run_hera() {
+    run_cmd HERA_OUT "$HERA_TIMEOUT_SEC" "$HERA_BIN" "$@"
+}
+
+# Hera reads 1-critical .bif only. Dummy-grade .scc synthetics have a
+# matching .bif 1-skeleton; use that.
+bif_for_hera() {
+    local f="$1"
+    local b
+    case "$f" in
+        *.scc)
+            b="${f%.scc}.bif"
+            ;;
+        *.bif)
+            b="$f"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    [[ -f "$b" ]] || return 1
+    printf '%s' "$b"
+}
+
+normalize_dist() {
+    local raw
+    raw="$(printf '%s' "$1" | tr -d '[:space:]')"
+    case "$raw" in
+        inf|Inf|INF|infinity|Infinity|+inf|+Inf|+INF)
+            printf 'infinity'
+            ;;
+        *)
+            printf '%s' "$raw"
+            ;;
+    esac
 }
 
 abort_if_interrupted() {
@@ -151,43 +225,102 @@ dist_ok() {
 run_case() {
     local name="$1" expected="$2"
     shift 2
+    local play_args=("$@")
     local start end elapsed status out dist mark
+    local hera_dim=0 hera_a="" hera_b="" hera_dist="" hera_sec=""
+    local hera_status=0 hera_raw="" pos=() arg i
+
+    i=0
+    while [[ $i -lt ${#play_args[@]} ]]; do
+        arg="${play_args[$i]}"
+        case "$arg" in
+            --dim)
+                i=$((i + 1))
+                hera_dim="${play_args[$i]}"
+                ;;
+            --*)
+                ;;
+            *)
+                pos+=("$arg")
+                ;;
+        esac
+        i=$((i + 1))
+    done
+    if [[ ${#pos[@]} -ge 2 ]]; then
+        hera_a="$(bif_for_hera "${pos[0]}" || true)"
+        hera_b="$(bif_for_hera "${pos[1]}" || true)"
+    fi
+
     printf '%-44s' "$name"
+
+    if [[ -n "$hera_a" && -n "$hera_b" ]]; then
+        start="$(date +%s.%N 2>/dev/null || date +%s)"
+        set +e
+        run_hera -d "$hera_dim" "$hera_a" "$hera_b"
+        hera_status=$?
+        set -e
+        end="$(date +%s.%N 2>/dev/null || date +%s)"
+        hera_sec="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')"
+        abort_if_interrupted "$hera_status" "$hera_sec"
+        if [[ "$hera_status" -eq 124 || "$hera_status" -eq 137 ]]; then
+            hera_dist="TIMEOUT"
+        elif [[ "$hera_status" -ne 0 ]]; then
+            hera_dist="error"
+        else
+            hera_raw="$(tail -n 1 "$HERA_OUT" 2>/dev/null || true)"
+            hera_dist="$(normalize_dist "$hera_raw")"
+            if [[ -z "$hera_dist" ]]; then
+                hera_dist="error"
+            fi
+        fi
+        rm -f "$HERA_OUT"
+        HERA_OUT=""
+    else
+        hera_dist="skip"
+        hera_sec=""
+    fi
+
     start="$(date +%s.%N 2>/dev/null || date +%s)"
     set +e
-    run_play "$@"
+    run_play "${play_args[@]}"
     status=$?
     set -e
     end="$(date +%s.%N 2>/dev/null || date +%s)"
     elapsed="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')"
     abort_if_interrupted "$status" "$elapsed"
     out="$(cat "$PLAY_OUT")"
-    cleanup
+    rm -f "$PLAY_OUT"
     PLAY_OUT=""
+    local hera_note
+    if [[ "$hera_dist" == "skip" ]]; then
+        hera_note="hera skip"
+    else
+        hera_note="hera $hera_dist  (${hera_sec}s)"
+    fi
     if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
-        echo "TIMEOUT  (${elapsed}s)"
-        rows+=("$name	$expected	TIMEOUT	$elapsed	timeout")
+        echo "TIMEOUT  (${elapsed}s)  $hera_note"
+        rows+=("$name	$expected	TIMEOUT	$elapsed	timeout	$hera_dist	$hera_sec")
         failed=$((failed + 1))
         return
     fi
     if [[ "$status" -ne 0 ]]; then
-        echo "FAIL exit $status  (${elapsed}s)"
+        echo "FAIL exit $status  (${elapsed}s)  $hera_note"
         printf '%s\n' "$out" | tail -n 8
-        rows+=("$name	$expected	exit$status	$elapsed	fail")
+        rows+=("$name	$expected	exit$status	$elapsed	fail	$hera_dist	$hera_sec")
         failed=$((failed + 1))
         return
     fi
     dist="$(printf '%s\n' "$out" | awk '/^Matching distance:/{d=$3} END{print d}')"
     if dist_ok "$dist" "$expected"; then
-        echo "ok  $dist  (${elapsed}s)"
+        echo "ok  $dist  (${elapsed}s)  $hera_note"
         mark="ok"
         passed=$((passed + 1))
     else
-        echo "FAIL got '$dist' expected $expected  (${elapsed}s)"
+        echo "FAIL got '$dist' expected $expected  (${elapsed}s)  $hera_note"
         mark="fail"
         failed=$((failed + 1))
     fi
-    rows+=("$name	$expected	$dist	$elapsed	$mark")
+    rows+=("$name	$expected	$dist	$elapsed	$mark	$hera_dist	$hera_sec")
 }
 
 cd "$ROOT"
@@ -228,8 +361,9 @@ else
 fi
 
 echo "play: $PLAY_BIN" >&2
+echo "hera: $HERA_BIN" >&2
 echo "flags: $FLAG_DESC" >&2
-echo "timeout: ${TIMEOUT_SEC}s" >&2
+echo "timeout: ${TIMEOUT_SEC}s (hera ${HERA_TIMEOUT_SEC}s)" >&2
 echo
 
 # --- synthetics, known distances ---------------------------------------
@@ -299,7 +433,7 @@ v10 7 10 3
 v10 8 10 3
 
 echo
-printf '%s\n' $'name\texpected\tgot\tseconds\tstatus'
+printf '%s\n' $'name\texpected\tgot\tseconds\tstatus\thera\thera_seconds'
 printf '%s\n' "${rows[@]}"
 echo
 if [[ "$failed" -eq 0 ]]; then

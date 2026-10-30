@@ -114,7 +114,8 @@ change the slice barcodes, only the arrangement.
 `run_medium.sh` is the 10–30s set for timing code tweaks. It includes the
 four medium cases above plus more synthetics and 10-vertex bifiltration
 pairs, and prints a TSV summary (`name`, `expected`, `got`, `seconds`,
-`status`).
+`status`, `hera`, `hera_seconds`). Hera’s `matching_dist` is run on the
+matching `.bif` files (`HERA_BIN` if set, otherwise auto-detected).
 
 ```bash
 ./tests/run_medium.sh                 # --no-aida, incremental refine
