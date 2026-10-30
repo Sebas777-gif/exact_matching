@@ -154,6 +154,9 @@ Sum: 5
 Loaded 2 presentation(s)
 Arrangement has 18 vertices, 27 edges, and 11 faces
 Matching distance: 1.5
+A0 lines: 5
+Total lines: 5
+Green-green deletions: 0
 ```
 
 - Join counts come from incomparable generator grades and incomparable
@@ -163,6 +166,12 @@ Matching distance: 1.5
 - `Matching distance` is the computed value of $d_{\mathrm{match}}$, printed
   as a double, or `infinity` when some slice with positive slope has
   unmatched infinite bars.
+- `A0 lines` is the number of supporting lines of the coarse arrangement
+  (dual of each distinct grade, plus $s=0$ and $s=1$).
+- `Total lines` is that $A_0$ count plus each comparison line that actually
+  entered a local overlay (one count per geometric line).
+- `Green-green deletions` is the number of edges removed because both
+  incident faces were green.
 
 If fewer than two presentations are loaded, the program exits after the join
 report (or with an error if an arrangement was requested).

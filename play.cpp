@@ -220,18 +220,22 @@ int main(int argc, char** argv) {
       }
 
       Arrangement_2 arr;
-      matching::build_arrangement_A(arr, modules[0], modules[1], refine);
+      matching::ArrangementStats stats;
+      matching::build_arrangement_A(arr, modules[0], modules[1], refine, &stats);
 
       std::cout << "Arrangement has " << arr.number_of_vertices() << " vertices, "
                 << arr.number_of_edges() << " edges, and "
                 << arr.number_of_faces() << " faces" << std::endl;
 
-      const matching::FT d = matching::maximize_F(arr, modules[0], modules[1], refine);
+      const matching::FT d = matching::maximize_F(arr, modules[0], modules[1], refine, &stats);
       std::cout << "Matching distance: ";
       if (matching::is_infinite_F(d))
           std::cout << "infinity" << std::endl;
       else
           std::cout << CGAL::to_double(d) << std::endl;
+      std::cout << "A0 lines: " << stats.a0_lines << std::endl;
+      std::cout << "Total lines: " << stats.lines_introduced << std::endl;
+      std::cout << "Green-green deletions: " << stats.green_green_deletions << std::endl;
   }
 
   return 0;

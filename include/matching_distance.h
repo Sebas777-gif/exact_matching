@@ -73,6 +73,16 @@ typedef CGAL::Arrangement_2<Traits_2, Face_colored_dcel> Colored_arrangement;
 const int FACE_RED = 0;
 const int FACE_GREEN = 1;
 
+// a0_lines: duals plus s=0 and s=1 inserted into the global A0.
+// lines_introduced: a0_lines plus comparison lines that actually entered
+// a local overlay (one count per geometric line, not per clipped piece).
+// Green-green deletions are remove_edge calls that merge two green faces.
+struct ArrangementStats {
+  std::size_t a0_lines = 0;
+  std::size_t lines_introduced = 0;
+  std::size_t green_green_deletions = 0;
+};
+
 // Bigrade in the module's (x, y) plane.
 struct Grade2 {
   FT x, y;
@@ -894,7 +904,8 @@ inline void collect_labeled_grades(const Presentation& M, const Presentation& N,
 inline void build_arrangement_A(Arrangement_2& arr,
                                 const Module& M,
                                 const Module& N,
-                                bool /*refine*/) {
+                                bool /*refine*/,
+                                ArrangementStats* stats = nullptr) {
   std::vector<LabeledGrade> grades;
   collect_labeled_grades(M, N, grades);
 
@@ -907,14 +918,19 @@ inline void build_arrangement_A(Arrangement_2& arr,
   }
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(0), FT(0)), Point_2(FT(0), FT(1)))));
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(1), FT(0)), Point_2(FT(1), FT(1)))));
+  if (stats) {
+    stats->a0_lines += curves.size();
+    stats->lines_introduced += curves.size();
+  }
   CGAL::insert(arr, curves.begin(), curves.end());
 }
 
 inline void build_arrangement_A(Arrangement_2& arr,
                                 const Presentation& M,
                                 const Presentation& N,
-                                bool refine) {
-  build_arrangement_A(arr, as_module(M), as_module(N), refine);
+                                bool refine,
+                                ArrangementStats* stats = nullptr) {
+  build_arrangement_A(arr, as_module(M), as_module(N), refine, stats);
 }
 
 // Dedup key for realizing pairs while walking comparison vertices of a face.
@@ -1234,7 +1250,7 @@ inline bool local_has_red(const Colored_arrangement& local) {
   return false;
 }
 
-inline void merge_green_green(Colored_arrangement& local) {
+inline void merge_green_green(Colored_arrangement& local, ArrangementStats& stats) {
   for (;;) {
     bool killed = false;
     for (auto eit = local.edges_begin(); eit != local.edges_end(); ++eit) {
@@ -1243,6 +1259,7 @@ inline void merge_green_green(Colored_arrangement& local) {
       if (eit->face()->data() == FACE_GREEN &&
           eit->twin()->face()->data() == FACE_GREEN) {
         local.remove_edge(eit);
+        ++stats.green_green_deletions;
         killed = true;
         break;
       }
@@ -1375,7 +1392,8 @@ inline void refine_red_a0_face(
     bool has_a0_ub, const FT& a0_ub,
     Consider& consider_F,
     FT& best,
-    bool& infinite) {
+    bool& infinite,
+    ArrangementStats& stats) {
   Colored_arrangement local;
   if (!init_local_from_a0_face(local, a0_face, interior)) {
     refine_face_pairwise(a0_face, interior, seeds, M, N, grades, pl,
@@ -1448,9 +1466,10 @@ inline void refine_red_a0_face(
     if (infinite) return;
 
     CGAL::insert(local, pieces.begin(), pieces.end());
+    ++stats.lines_introduced;
     recolor_local_faces(local, M, N, best, consider_F, infinite);
     if (infinite) return;
-    merge_green_green(local);
+    merge_green_green(local, stats);
   }
 }
 
@@ -1461,7 +1480,10 @@ inline void refine_red_a0_face(
 inline FT maximize_F(const Arrangement_2& arr,
                      const Module& M,
                      const Module& N,
-                     bool refine = true) {
+                     bool refine = true,
+                     ArrangementStats* stats = nullptr) {
+  ArrangementStats local_stats;
+  ArrangementStats& st = stats ? *stats : local_stats;
   FT best = FT(0);
   bool any = false;
   bool infinite = false;
@@ -1595,7 +1617,7 @@ inline FT maximize_F(const Arrangement_2& arr,
     if (work.has_ub && !(best < work.ub)) continue;
     if (work.seeds.empty()) continue;
     refine_red_a0_face(work.f, work.interior, work.seeds, M, N, grades, pl,
-                       work.has_ub, work.ub, consider_F, best, infinite);
+                       work.has_ub, work.ub, consider_F, best, infinite, st);
   }
 
   return any ? best : FT(0);
@@ -1604,8 +1626,9 @@ inline FT maximize_F(const Arrangement_2& arr,
 inline FT maximize_F(const Arrangement_2& arr,
                      const Presentation& M,
                      const Presentation& N,
-                     bool refine = true) {
-  return maximize_F(arr, as_module(M), as_module(N), refine);
+                     bool refine = true,
+                     ArrangementStats* stats = nullptr) {
+  return maximize_F(arr, as_module(M), as_module(N), refine, stats);
 }
 
 }  // namespace matching

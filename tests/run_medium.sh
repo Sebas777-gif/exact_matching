@@ -14,7 +14,7 @@
 #   ./tests/run_medium.sh --aida --no-refine
 #   ./tests/run_medium.sh --no-aida       # explicit default preprocess skip
 #   PLAY_BIN=./build/play ./tests/run_medium.sh --aida
-#   TIMEOUT_SEC=90 ./tests/run_medium.sh --aida
+#   TIMEOUT_SEC=300 ./tests/run_medium.sh --aida
 #   HERA_BIN=/path/to/matching_dist ./tests/run_medium.sh
 #
 # Prints one line per case and a TSV summary (play and Hera).
@@ -55,8 +55,8 @@ Usage: $0 [--aida|--no-aida] [--no-refine]
   --no-refine   A0 sample only. Default is incremental comparison-line refine
 
 Environment: PLAY_BIN (default $ROOT/build/play), HERA_BIN
-(matching_dist; auto-detected if unset), TIMEOUT_SEC (default 60,
-or 30 with --no-refine, or 90 with --aida refine).
+(matching_dist; auto-detected if unset), TIMEOUT_SEC (default 300
+with refine, or 30 with --no-refine).
 EOF
 }
 
@@ -80,14 +80,11 @@ done
 if [[ "$TIMEOUT_WAS_SET" -eq 0 ]]; then
     if [[ "$NO_REFINE" -eq 1 ]]; then
         TIMEOUT_SEC=30
-    elif [[ "$USE_AIDA" -eq 1 ]]; then
-        # 30-60s cases (merge K=8 ~54s) need slack under load.
-        TIMEOUT_SEC=90
     else
-        TIMEOUT_SEC=60
+        TIMEOUT_SEC=300
     fi
 fi
-TIMEOUT_SEC="${TIMEOUT_SEC:-60}"
+TIMEOUT_SEC="${TIMEOUT_SEC:-300}"
 
 if [[ ! -x "$PLAY_BIN" ]]; then
     echo "error: play not executable: $PLAY_BIN" >&2

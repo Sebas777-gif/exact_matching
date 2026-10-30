@@ -123,7 +123,7 @@ matching `.bif` files (`HERA_BIN` if set, otherwise auto-detected).
 ./tests/run_medium.sh --aida          # mpfree+AIDA, incremental refine (~30–60s synthetics)
 ./tests/run_medium.sh --aida --no-refine
 PLAY_BIN=./build/play ./tests/run_medium.sh --aida
-TIMEOUT_SEC=90 ./tests/run_medium.sh --aida
+TIMEOUT_SEC=300 ./tests/run_medium.sh --aida
 ```
 
 `--aida` drops `--no-aida` so play runs mpfree then AIDA. Dummy empty
@@ -164,7 +164,7 @@ the barcode).
 `--aida` with incremental refine (the play default) does **not** use those
 140-anchor / merge-70 files: they take minutes once comparison lines are
 inserted. The suite switches to 25 constructed `.bif` pairs sized so
-AIDA+refine lands around 30–60s each (default timeout 90s for slack).
+AIDA+refine lands around 30–60s each (default timeout 300s for slack).
 v10 n50 pairs still run; with AIDA they finish in a few seconds.
 
 Extra $H_0$ bars are a **star into the origin** (offset 200, step 3).

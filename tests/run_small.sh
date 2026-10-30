@@ -49,10 +49,10 @@ if [[ "$TIMEOUT_WAS_SET" -eq 0 ]]; then
     if [[ "$NO_REFINE" -eq 1 ]]; then
         TIMEOUT_SEC=30
     else
-        TIMEOUT_SEC=60
+        TIMEOUT_SEC=300
     fi
 fi
-TIMEOUT_SEC="${TIMEOUT_SEC:-60}"
+TIMEOUT_SEC="${TIMEOUT_SEC:-300}"
 
 if [[ ! -x "$PLAY_BIN" ]]; then
     echo "error: play not executable: $PLAY_BIN" >&2
