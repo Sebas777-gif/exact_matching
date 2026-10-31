@@ -181,6 +181,10 @@ $L/2$. Changing $L$ keeps runtime and changes the distance.
 
 `far_merge.bif` is $L=51$; `far_merge_41.bif` already existed;
 `far_merge_{61,71,81}.bif` are the same two-vertex merge at $(L,0)$.
+x-axis stars produce concurrent duals (fewer vertices, refine on unbounded
+wedges); y-axis stars produce more vertices, so a smaller $K$ hits the
+same band. Merge $K=8$ extras are y-axis on the horizontal module and
+x-axis on the vertical module.
 
 ## Finite random pairs
 
@@ -197,7 +201,21 @@ them with:
 
 Results go to `tests/finite_results_<mode>.txt`. Pairs are ordered by the
 old `--no-refine` time (shortest first). Ctrl+C keeps completed rows.
-x-axis stars produce concurrent duals (fewer vertices, refine on unbounded
-wedges); y-axis stars produce more vertices, so a smaller $K$ hits the
-same band. Merge $K=8$ extras are y-axis on the horizontal module and
-x-axis on the vertical module.
+
+## Kerber `small_instances`
+
+`data_benchmarks/small_instances` is small for mpfree/AIDA, not for $A_0$.
+A file is feasible when it has at most 200 distinct bigrades (override with
+`--max-grades`). That keeps a pair under roughly 330 $A_0$ lines. The
+5k-point `cube2_density` files have about 14k grades each and are excluded.
+Pairs are only within the same suffix (`.scc_k`, `.minpres_k`, or plain
+`.scc`), because the trailing index is reflected homology.
+
+```bash
+./small_instance_benchmarks.sh              # AIDA + refine, max 200 grades
+./small_instance_benchmarks.sh --no-refine
+./small_instance_benchmarks.sh --max-grades 400
+```
+
+Results go to `tests/small_instance_results.txt`, including `a0_lines`.
+Ctrl+C keeps completed rows.

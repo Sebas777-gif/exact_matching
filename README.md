@@ -82,6 +82,11 @@ scc2020
 raw chain complexes with more than two non-zero degrees. Minimal presentations
 from mpfree are the expected `.scc` input.
 
+Kerber's min-pres datasets use `foo.scc_k` or `foo.scc.minpres_k`. Those are
+already presentations; `k` is the chain-complex position, reflected homology
+(`.scc_2` is $H_0$, `.scc_1` is $H_1$). Play treats them as `.scc`. Do not
+pass that `k` as `--dim` (`--dim` only selects homology when reading a `.bif`).
+
 By default each file is one module and is preprocessed with **mpfree** (for
 `.bif`) and **AIDA** (for `.bif` and `.scc`). AIDA's indecomposable summands
 become the presentations of that module. $A_0$ is built from the union of
@@ -95,7 +100,7 @@ presentation of $H_d$ by taking $d$-simplices as generators and
 $(d+1)$-simplices as relations.
 
 The matching distance is taken between **two modules** (two files, or one
-file with exactly two `scc2020` blocks). The two files may mix `.scc`,
+file with exactly two `scc2020` blocks). The two files may mix `.scc`, `.scc_k`, `.minpres_k`,
 `.sccsum`, and `.bif`.
 
 Set `$MPFREE` and `$AIDA` (or `$AIDA_WITHOUT_STATS`) if the binaries are not
@@ -121,7 +126,7 @@ Two files, one presentation or bifiltration each:
 
 | Flag | Effect |
 | --- | --- |
-| `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for `.scc`. |
+| `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for presentations (`.scc`, `.scc_k`, `.minpres_k`). |
 | `--no-aida` | Do not run mpfree or AIDA. Use the file as a raw presentation (or the in-process $H_d$ presentation of a `.bif`). |
 | `--no-cgal` | Only count generator/relation joins. Do not build the arrangement or compute the distance. |
 | `--no-refine` | Maximize $F$ only on vertices and outer cells of $A_0$. Skip per-face comparison-line intersections. Faster, and can miss the exact maximum. |
@@ -142,7 +147,8 @@ skips comparison-line insertion); see `tests/README.md`. Both default to
 incremental refine. `--aida` without `--no-refine` uses 25 constructed
 `.bif` pairs sized for about 30–60s each. The 18 finite pairs from
 `tests/results.txt` are `./finite_benchmarks.sh` (`--old` is
-`--no-aida --no-refine`; `--new` is AIDA + refine).
+`--no-aida --no-refine`; `--new` is AIDA + refine). Feasible Kerber
+`data_benchmarks/small_instances` pairs are `./small_instance_benchmarks.sh`.
 
 ## Output
 

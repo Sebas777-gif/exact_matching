@@ -44,10 +44,31 @@ inline bool is_bif_path(const std::string& path)
     return suffix_of(path) == ".bif";
 }
 
+// Kerber min-pres datasets name files foo.scc_2 / foo.scc.minpres_0.
+// The trailing integer is the chain-complex position (reflected homology:
+// .scc_2 is already an H_0 presentation). It is not --dim.
+inline bool scc_suffix_with_index(const std::string& s, const char* prefix)
+{
+    const std::string p = prefix;
+    if (s.size() < p.size() + 2)
+        return false;
+    if (s.compare(0, p.size(), p) != 0)
+        return false;
+    if (s[p.size()] != '_')
+        return false;
+    for (std::size_t i = p.size() + 1; i < s.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(s[i])))
+            return false;
+    }
+    return true;
+}
+
 inline bool is_scc_path(const std::string& path)
 {
     auto s = suffix_of(path);
-    return s == ".scc" || s == ".sccsum";
+    return s == ".scc" || s == ".sccsum"
+        || scc_suffix_with_index(s, ".scc")
+        || scc_suffix_with_index(s, ".minpres");
 }
 
 inline std::vector<BifSimplex> read_bif(const std::string& path)

@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
 
   if(argc<2) {
     std::cerr << "Usage: " << argv[0]
-              << " file.scc|file.sccsum|file.bif [file2] [--dim d] [--no-cgal] [--no-refine] [--no-aida]"
+              << " file.scc|file.scc_k|file.sccsum|file.bif [file2] [--dim d] [--no-cgal] [--no-refine] [--no-aida]"
               << std::endl;
     std::exit(1);
   }

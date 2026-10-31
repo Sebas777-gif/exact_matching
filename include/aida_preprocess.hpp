@@ -2,9 +2,9 @@
 
 // mpfree + AIDA preprocessing for one input file.
 //
-//   .bif    → chain complex → mpfree (minimal presentation) → AIDA (summands)
-//   .scc    → AIDA
-//   .sccsum → already decomposed; read as-is
+//   .bif                         → chain → mpfree → AIDA
+//   .scc / .scc_k / .minpres_k   → AIDA (already a presentation)
+//   .sccsum                      → already decomposed; read as-is
 //
 // Each file is one module. The matching distance uses the union of summand
 // grades for A0 and the concatenated slice barcodes for F.
@@ -164,7 +164,7 @@ inline matching::Module load_module(const std::string& path, int homology_dim,
     if (is_scc_path(path))
         return run_aida_on_presentation(path);
     throw std::runtime_error("unrecognized input " + path
-        + " (expected .bif, .scc, or .sccsum)");
+        + " (expected .bif, .scc, .scc_k, .minpres_k, or .sccsum)");
 }
 
 }  // namespace scc_hera
