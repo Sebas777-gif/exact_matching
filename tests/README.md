@@ -217,5 +217,11 @@ Pairs are only within the same suffix (`.scc_k`, `.minpres_k`, or plain
 ./small_instance_benchmarks.sh --max-grades 400
 ```
 
-Results go to `tests/small_instance_results.txt`, including `a0_lines`.
-Ctrl+C keeps completed rows.
+`--no-refine` appends to `tests/small_instance_results.txt`. A refine run
+(the default, without `--no-refine`) writes `tests/small_instance_results_refine.txt`
+instead. Columns include `a0_lines`, `total_lines`, and `green_green_deletions`.
+Ctrl+N skips the pair that is running and writes `???` in its measurement
+columns (that pair is not retried). Ctrl+C keeps completed rows. On a
+terminal, play rewrites three status lines for the pair that is running:
+the initial A0 count, total lines, and green-green deletions. Abort
+leaves that last frame on screen.

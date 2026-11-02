@@ -34,12 +34,23 @@
 // deleted. `--no-refine` stops after the A0 sample.
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <csignal>
+#include <cstdio>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <locale>
 #include <random>
 #include <set>
+#include <sstream>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include <phat/algorithms/standard_reduction.h>
 #include <phat/boundary_matrix.h>
@@ -81,6 +92,163 @@ struct ArrangementStats {
   std::size_t a0_lines = 0;
   std::size_t lines_introduced = 0;
   std::size_t green_green_deletions = 0;
+};
+
+// Three status lines on a terminal stderr, rewritten in place while
+// maximize_F runs: the initial A0 count, total lines, and green-green
+// deletions. Each frame ends with a newline, so Ctrl+C leaves the last
+// totals on screen and the shell prompt starts on the next line.
+// Redirected stderr is not rewritten; an abort appends one plain snapshot.
+struct LiveCounterState {
+  int fd = STDERR_FILENO;
+  bool tty = false;
+  bool active = false;
+  bool drawn = false;
+  bool armed = false;
+  volatile sig_atomic_t a0 = 0;
+  volatile sig_atomic_t total = 0;
+  volatile sig_atomic_t deleted = 0;
+  struct sigaction old_int {};
+  struct sigaction old_term {};
+};
+
+inline LiveCounterState& live_counter_state() {
+  static LiveCounterState state;
+  return state;
+}
+
+inline void live_counter_write(int fd, const char* p, std::size_t n) {
+  while (n > 0) {
+    const ssize_t w = ::write(fd, p, n);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      return;
+    }
+    p += w;
+    n -= static_cast<std::size_t>(w);
+  }
+}
+
+inline void live_counter_append_uint(char*& p, char* end, unsigned long value) {
+  char digits[20];
+  int n = 0;
+  do {
+    digits[n++] = static_cast<char>('0' + (value % 10));
+    value /= 10;
+  } while (value != 0 && n < static_cast<int>(sizeof digits));
+  while (n > 0 && p < end) *p++ = digits[--n];
+}
+
+// refresh moves back onto the three lines already on screen. tty also
+// clears each line before rewriting it. A log snapshot uses neither.
+inline int live_counter_format(char* buf, int cap, unsigned long a0,
+                               unsigned long total, unsigned long deleted,
+                               bool refresh, bool tty) {
+  char* p = buf;
+  char* end = buf + cap;
+  auto put = [&](const char* s) {
+    while (*s && p < end) *p++ = *s++;
+  };
+  if (refresh) put("\033[3A");
+  if (tty) put("\r\033[K");
+  put("A0 lines: ");
+  live_counter_append_uint(p, end, a0);
+  put("\n");
+  if (tty) put("\033[K");
+  put("Total lines: ");
+  live_counter_append_uint(p, end, total);
+  put("\n");
+  if (tty) put("\033[K");
+  put("Green-green deletions: ");
+  live_counter_append_uint(p, end, deleted);
+  put("\n");
+  return static_cast<int>(p - buf);
+}
+
+inline void live_counter_on_signal(int sig) {
+  LiveCounterState& state = live_counter_state();
+  // The terminal frame is already complete and ends with a newline.
+  // A log has no frame yet, so write one before exiting.
+  if (!state.tty && state.fd >= 0) {
+    char buf[256];
+    const int n = live_counter_format(
+        buf, static_cast<int>(sizeof buf),
+        static_cast<unsigned long>(state.a0),
+        static_cast<unsigned long>(state.total),
+        static_cast<unsigned long>(state.deleted), false, false);
+    if (n > 0) live_counter_write(state.fd, buf, static_cast<std::size_t>(n));
+  }
+  _exit(128 + sig);
+}
+
+inline void publish_live_counters(const ArrangementStats& stats) {
+  LiveCounterState& state = live_counter_state();
+  if (!state.active) return;
+  state.a0 = static_cast<sig_atomic_t>(stats.a0_lines);
+  state.total = static_cast<sig_atomic_t>(stats.lines_introduced);
+  state.deleted = static_cast<sig_atomic_t>(stats.green_green_deletions);
+  if (!state.tty) return;
+
+  char buf[256];
+  const int n = live_counter_format(
+      buf, static_cast<int>(sizeof buf),
+      static_cast<unsigned long>(state.a0),
+      static_cast<unsigned long>(state.total),
+      static_cast<unsigned long>(state.deleted), state.drawn, true);
+  sigset_t block, old;
+  sigemptyset(&block);
+  sigaddset(&block, SIGINT);
+  sigaddset(&block, SIGTERM);
+  sigprocmask(SIG_BLOCK, &block, &old);
+  if (n > 0) live_counter_write(state.fd, buf, static_cast<std::size_t>(n));
+  state.drawn = true;
+  sigprocmask(SIG_SETMASK, &old, nullptr);
+}
+
+inline void count_introduced_line(ArrangementStats& stats) {
+  ++stats.lines_introduced;
+  publish_live_counters(stats);
+}
+
+inline void count_green_green_deletion(ArrangementStats& stats) {
+  ++stats.green_green_deletions;
+  publish_live_counters(stats);
+}
+
+// Armed for the duration of maximize_F. The destructor only restores
+// signal handlers; it does not erase the three status lines.
+struct LiveCounterSession {
+  explicit LiveCounterSession(const ArrangementStats& stats) {
+    LiveCounterState& state = live_counter_state();
+    state.active = true;
+    if (!state.armed) {
+      std::fflush(stderr);
+      state.fd = STDERR_FILENO;
+      state.tty = ::isatty(state.fd) == 1;
+      struct sigaction action {};
+      action.sa_handler = live_counter_on_signal;
+      sigemptyset(&action.sa_mask);
+      sigaddset(&action.sa_mask, SIGINT);
+      sigaddset(&action.sa_mask, SIGTERM);
+      ::sigaction(SIGINT, &action, &state.old_int);
+      ::sigaction(SIGTERM, &action, &state.old_term);
+      state.armed = true;
+    }
+    publish_live_counters(stats);
+  }
+
+  ~LiveCounterSession() {
+    LiveCounterState& state = live_counter_state();
+    if (state.armed) {
+      ::sigaction(SIGINT, &state.old_int, nullptr);
+      ::sigaction(SIGTERM, &state.old_term, nullptr);
+      state.armed = false;
+    }
+    state.active = false;
+  }
+
+  LiveCounterSession(const LiveCounterSession&) = delete;
+  LiveCounterSession& operator=(const LiveCounterSession&) = delete;
 };
 
 // Bigrade in the module's (x, y) plane.
@@ -1259,7 +1427,7 @@ inline void merge_green_green(Colored_arrangement& local, ArrangementStats& stat
       if (eit->face()->data() == FACE_GREEN &&
           eit->twin()->face()->data() == FACE_GREEN) {
         local.remove_edge(eit);
-        ++stats.green_green_deletions;
+        count_green_green_deletion(stats);
         killed = true;
         break;
       }
@@ -1376,6 +1544,350 @@ inline void refine_face_pairwise(
   }
 }
 
+// Optional --vis dump. The red/green coloring exists only on the local
+// overlay of the A0 face currently being refined, so each snapshot is that
+// face clipped to a finite window, plus the coarse A0 edges in the same
+// window. Exact vertices are converted with to_double and clipped; far
+// intersections must not set the scale.
+inline std::string& vis_dump_path() {
+  static std::string path;
+  return path;
+}
+
+inline void set_vis_dump_path(std::string path) {
+  vis_dump_path() = std::move(path);
+}
+
+inline bool vis_to_double(const FT& v, double& out) {
+  const double d = CGAL::to_double(v);
+  if (!std::isfinite(d)) return false;
+  out = d;
+  return true;
+}
+
+inline bool vis_to_point(const Point_2& p, double& x, double& y) {
+  return vis_to_double(p.x(), x) && vis_to_double(p.y(), y);
+}
+
+struct VisWindow {
+  double s0 = 0, s1 = 1, t0 = -1, t1 = 1;
+  bool ok = false;
+};
+
+inline VisWindow vis_window_from(std::vector<double> ss, std::vector<double> tt,
+                                 bool drop_outliers) {
+  VisWindow w;
+  if (ss.size() < 2 || ss.size() != tt.size()) return w;
+  std::vector<double> srt_s = ss, srt_t = tt;
+  std::sort(srt_s.begin(), srt_s.end());
+  std::sort(srt_t.begin(), srt_t.end());
+  auto span_of = [](const std::vector<double>& v, bool pct) {
+    if (!pct || v.size() < 8) return std::make_pair(v.front(), v.back());
+    const std::size_t lo = v.size() / 20;
+    const std::size_t hi = v.size() - 1 - lo;
+    const double full = v.back() - v.front();
+    const double mid = v[hi] - v[lo];
+    if (full > 8.0 * std::max(mid, 1e-12)) return std::make_pair(v[lo], v[hi]);
+    return std::make_pair(v.front(), v.back());
+  };
+  const std::pair<double, double> sspan = span_of(srt_s, drop_outliers);
+  const std::pair<double, double> tspan = span_of(srt_t, drop_outliers);
+  double s0 = sspan.first;
+  double s1 = sspan.second;
+  double t0 = tspan.first;
+  double t1 = tspan.second;
+  auto pad = [](double& a, double& b) {
+    double span = b - a;
+    if (!(span > 1e-6)) {
+      const double m = 0.5 * (a + b);
+      a = m - 5e-3;
+      b = m + 5e-3;
+      return;
+    }
+    a -= 0.12 * span;
+    b += 0.12 * span;
+  };
+  pad(s0, s1);
+  pad(t0, t1);
+  w.s0 = s0;
+  w.s1 = s1;
+  w.t0 = t0;
+  w.t1 = t1;
+  w.ok = std::isfinite(s0) && std::isfinite(s1) && std::isfinite(t0) && std::isfinite(t1);
+  return w;
+}
+
+inline bool vis_inside_halfplane(double x, double y, double bx, double by,
+                                 double dx, double dy) {
+  return dx * (y - by) - dy * (x - bx) >= -1e-9;
+}
+
+inline std::vector<std::pair<double, double>> vis_clip_halfplane(
+    const std::vector<std::pair<double, double>>& poly,
+    double bx, double by, double dx, double dy) {
+  std::vector<std::pair<double, double>> out;
+  if (poly.empty()) return out;
+  const std::size_t n = poly.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto prev = poly[(i + n - 1) % n];
+    const auto cur = poly[i];
+    const bool in_prev = vis_inside_halfplane(prev.first, prev.second, bx, by, dx, dy);
+    const bool in_cur = vis_inside_halfplane(cur.first, cur.second, bx, by, dx, dy);
+    if (in_cur != in_prev) {
+      const double f0 = dx * (prev.second - by) - dy * (prev.first - bx);
+      const double f1 = dx * (cur.second - by) - dy * (cur.first - bx);
+      const double den = f0 - f1;
+      const double t = (std::fabs(den) < 1e-18) ? 0.0 : f0 / den;
+      const double u = std::max(0.0, std::min(1.0, t));
+      out.emplace_back(prev.first + u * (cur.first - prev.first),
+                       prev.second + u * (cur.second - prev.second));
+    }
+    if (in_cur) out.push_back(cur);
+  }
+  return out;
+}
+
+inline void vis_unique_poly(std::vector<std::pair<double, double>>& poly) {
+  std::vector<std::pair<double, double>> u;
+  for (const auto& p : poly) {
+    if (!std::isfinite(p.first) || !std::isfinite(p.second)) continue;
+    if (!u.empty() && std::hypot(p.first - u.back().first, p.second - u.back().second) < 1e-9)
+      continue;
+    u.push_back(p);
+  }
+  if (u.size() >= 2 && std::hypot(u.front().first - u.back().first,
+                                  u.front().second - u.back().second) < 1e-9)
+    u.pop_back();
+  poly.swap(u);
+}
+
+// Clip a convex arrangement face to the window. The face lies to the left
+// of each oriented boundary edge, so intersecting those halfplanes with the
+// rectangle is the visible polygon, including unbounded cells.
+template<typename FaceHandle>
+inline std::vector<std::pair<double, double>> vis_clip_face(
+    FaceHandle f, const VisWindow& w) {
+  std::vector<std::pair<double, double>> poly = {
+      {w.s0, w.t0}, {w.s1, w.t0}, {w.s1, w.t1}, {w.s0, w.t1}};
+  for_each_face_halfedge(f, [&](auto h) {
+    if (h->is_fictitious() || poly.size() < 3) return;
+    const Vector_2 dir = oriented_halfedge_dir(h);
+    double dx = 0, dy = 0;
+    if (!vis_to_double(dir.x(), dx) || !vis_to_double(dir.y(), dy)) return;
+    const double len = std::hypot(dx, dy);
+    if (!(len > 0)) return;
+    dx /= len;
+    dy /= len;
+    double bx = 0, by = 0;
+    bool have = false;
+    if (!h->source()->is_at_open_boundary())
+      have = vis_to_point(h->source()->point(), bx, by);
+    if (!have && !h->target()->is_at_open_boundary())
+      have = vis_to_point(h->target()->point(), bx, by);
+    if (!have) {
+      const Line_2 ln = h->curve().supporting_line();
+      double a = 0, b = 0, c = 0;
+      if (!vis_to_double(ln.a(), a) || !vis_to_double(ln.b(), b) || !vis_to_double(ln.c(), c))
+        return;
+      if (std::fabs(b) > 1e-18) {
+        bx = 0;
+        by = -c / b;
+        have = std::isfinite(by);
+      } else if (std::fabs(a) > 1e-18) {
+        bx = -c / a;
+        by = 0;
+        have = std::isfinite(bx);
+      }
+    }
+    if (!have) return;
+    poly = vis_clip_halfplane(poly, bx, by, dx, dy);
+  });
+  vis_unique_poly(poly);
+  return poly;
+}
+
+inline bool vis_clip_segment(double x0, double y0, double x1, double y1,
+                             const VisWindow& w,
+                             double& ox0, double& oy0, double& ox1, double& oy1) {
+  const double dx = x1 - x0, dy = y1 - y0;
+  double u0 = 0, u1 = 1;
+  auto clip = [&](double p, double q) {
+    if (std::fabs(p) < 1e-18) return q >= -1e-12;
+    const double r = q / p;
+    if (p < 0) {
+      if (r > u1) return false;
+      if (r > u0) u0 = r;
+    } else {
+      if (r < u0) return false;
+      if (r < u1) u1 = r;
+    }
+    return true;
+  };
+  if (!clip(-dx, x0 - w.s0) || !clip(dx, w.s1 - x0) || !clip(-dy, y0 - w.t0) ||
+      !clip(dy, w.t1 - y0) || u1 < u0)
+    return false;
+  ox0 = x0 + u0 * dx;
+  oy0 = y0 + u0 * dy;
+  ox1 = x0 + u1 * dx;
+  oy1 = y0 + u1 * dy;
+  return std::isfinite(ox0) && std::isfinite(oy0) && std::isfinite(ox1) && std::isfinite(oy1);
+}
+
+inline void vis_collect_a0_segments(const Arrangement_2& arr, const VisWindow& w,
+                                    std::vector<std::array<double, 4>>& segs) {
+  const double span = std::max(w.s1 - w.s0, w.t1 - w.t0);
+  const double reach = span * 1000.0 + 1.0;
+  for (auto eit = arr.edges_begin(); eit != arr.edges_end(); ++eit) {
+    const auto& cv = eit->curve();
+    double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    bool have = false;
+    if (cv.is_segment()) {
+      have = vis_to_point(cv.segment().source(), x0, y0) &&
+             vis_to_point(cv.segment().target(), x1, y1);
+    } else if (cv.is_ray()) {
+      double dx = 0, dy = 0;
+      have = vis_to_point(cv.ray().source(), x0, y0) &&
+             vis_to_double(cv.ray().direction().dx(), dx) &&
+             vis_to_double(cv.ray().direction().dy(), dy);
+      if (!have) continue;
+      const double len = std::hypot(dx, dy);
+      if (!(len > 0)) continue;
+      x1 = x0 + reach * dx / len;
+      y1 = y0 + reach * dy / len;
+    } else if (cv.is_line()) {
+      double dx = 0, dy = 0;
+      const auto dir = cv.line().direction();
+      have = vis_to_point(cv.line().point(0), x0, y0) && vis_to_double(dir.dx(), dx) &&
+             vis_to_double(dir.dy(), dy);
+      if (!have) continue;
+      const double len = std::hypot(dx, dy);
+      if (!(len > 0)) continue;
+      dx /= len;
+      dy /= len;
+      x1 = x0 + reach * dx;
+      y1 = y0 + reach * dy;
+      x0 -= reach * dx;
+      y0 -= reach * dy;
+    }
+    if (!have) continue;
+    double a = 0, b = 0, c = 0, d = 0;
+    if (vis_clip_segment(x0, y0, x1, y1, w, a, b, c, d)) segs.push_back({a, b, c, d});
+  }
+}
+
+inline void vis_write_json(const std::string& phase, int face_index, int face_count,
+                           const ArrangementStats& stats, const VisWindow& w,
+                           const std::vector<std::array<double, 4>>& segs,
+                           const std::vector<std::pair<std::string, std::vector<std::pair<double, double>>>>&
+                               regions) {
+  if (vis_dump_path().empty() || !w.ok) return;
+  std::ostringstream body;
+  body.imbue(std::locale::classic());
+  body << std::setprecision(10);
+  body << "{\n";
+  body << "  \"phase\": \"" << phase << "\",\n";
+  body << "  \"face_index\": " << face_index << ",\n";
+  body << "  \"face_count\": " << face_count << ",\n";
+  body << "  \"a0_lines\": " << stats.a0_lines << ",\n";
+  body << "  \"total_lines\": " << stats.lines_introduced << ",\n";
+  body << "  \"green_green_deletions\": " << stats.green_green_deletions << ",\n";
+  body << "  \"window\": [" << w.s0 << ", " << w.s1 << ", " << w.t0 << ", " << w.t1 << "],\n";
+  body << "  \"a0_segments\": [";
+  for (std::size_t i = 0; i < segs.size(); ++i) {
+    if (i) body << ',';
+    body << '[' << segs[i][0] << ',' << segs[i][1] << ',' << segs[i][2] << ',' << segs[i][3]
+         << ']';
+  }
+  body << "],\n  \"regions\": [";
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    if (i) body << ',';
+    body << "{\"color\":\"" << regions[i].first << "\",\"poly\":[";
+    const auto& poly = regions[i].second;
+    for (std::size_t k = 0; k < poly.size(); ++k) {
+      if (k) body << ',';
+      body << '[' << poly[k].first << ',' << poly[k].second << ']';
+    }
+    body << "]}";
+  }
+  body << "]}\n";
+
+  const std::string path = vis_dump_path();
+  const std::string tmp = path + ".tmp";
+  {
+    std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
+    if (!os) return;
+    os << body.str();
+    if (!os) {
+      os.close();
+      std::remove(tmp.c_str());
+      return;
+    }
+  }
+  if (std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
+}
+
+inline VisWindow vis_overview_window(const Arrangement_2& arr) {
+  std::vector<double> ss, tt;
+  for (auto vit = arr.vertices_begin(); vit != arr.vertices_end(); ++vit) {
+    if (vit->is_at_open_boundary()) continue;
+    double s = 0, t = 0;
+    if (!vis_to_point(vit->point(), s, t)) continue;
+    if (s < -2.0 || s > 8.0) continue;
+    ss.push_back(s);
+    tt.push_back(t);
+  }
+  VisWindow w = vis_window_from(ss, tt, true);
+  if (!w.ok) {
+    w.s0 = -0.25;
+    w.s1 = 2.5;
+    w.t0 = -2;
+    w.t1 = 2;
+    w.ok = true;
+  }
+  return w;
+}
+
+inline void vis_write_overview(const Arrangement_2& arr, const ArrangementStats& stats) {
+  if (vis_dump_path().empty()) return;
+  const VisWindow w = vis_overview_window(arr);
+  std::vector<std::array<double, 4>> segs;
+  vis_collect_a0_segments(arr, w, segs);
+  vis_write_json("a0", -1, static_cast<int>(arr.number_of_faces()), stats, w, segs, {});
+}
+
+template<typename FaceHandle>
+inline void vis_write_local(const Arrangement_2& a0, FaceHandle a0_face, int face_index,
+                            int face_count, const Colored_arrangement& local,
+                            const ArrangementStats& stats) {
+  if (vis_dump_path().empty()) return;
+  std::vector<double> ss, tt;
+  for_each_face_halfedge(a0_face, [&](auto h) {
+    if (h->source()->is_at_open_boundary()) return;
+    double s = 0, t = 0;
+    if (!vis_to_point(h->source()->point(), s, t)) return;
+    ss.push_back(s);
+    tt.push_back(t);
+  });
+  VisWindow w = vis_window_from(ss, tt, true);
+  if (!w.ok) w = vis_overview_window(a0);
+
+  CGAL::Arr_naive_point_location<Colored_arrangement> lpl(local);
+  std::vector<std::pair<std::string, std::vector<std::pair<double, double>>>> regions;
+  for (auto fit = local.faces_begin(); fit != local.faces_end(); ++fit) {
+    if (fit->is_fictitious()) continue;
+    Point_2 ip;
+    if (!face_interior_point(lpl, fit, ip)) continue;
+    if (!point_in_convex_face(a0_face, ip)) continue;
+    auto poly = vis_clip_face(fit, w);
+    if (poly.size() < 3) continue;
+    const char* color = (fit->data() == FACE_RED) ? "red" : "green";
+    regions.emplace_back(color, std::move(poly));
+  }
+  std::vector<std::array<double, 4>> segs;
+  vis_collect_a0_segments(a0, w, segs);
+  vis_write_json("refine", face_index, face_count, stats, w, segs, regions);
+}
+
 // Shuffle the current witness's comparison lines and insert them one at a
 // time into a local overlay of this A0 face. Skip a line whose zone is
 // entirely green. Boundary hits of a red split raise δ; new subfaces with
@@ -1383,6 +1895,7 @@ inline void refine_face_pairwise(
 // enqueue their own O(n²) lines. Never materializes the global O(n⁴) list.
 template<typename Consider>
 inline void refine_red_a0_face(
+    const Arrangement_2& a0,
     Arrangement_2::Face_const_handle a0_face,
     const Point_2& interior,
     const std::vector<Witness>& seeds,
@@ -1393,13 +1906,16 @@ inline void refine_red_a0_face(
     Consider& consider_F,
     FT& best,
     bool& infinite,
-    ArrangementStats& stats) {
+    ArrangementStats& stats,
+    int face_index,
+    int face_count) {
   Colored_arrangement local;
   if (!init_local_from_a0_face(local, a0_face, interior)) {
     refine_face_pairwise(a0_face, interior, seeds, M, N, grades, pl,
                          consider_F, infinite);
     return;
   }
+  vis_write_local(a0, a0_face, face_index, face_count, local, stats);
 
   std::set<PairKey> seen;
   std::vector<Line_2> pending;
@@ -1466,10 +1982,11 @@ inline void refine_red_a0_face(
     if (infinite) return;
 
     CGAL::insert(local, pieces.begin(), pieces.end());
-    ++stats.lines_introduced;
+    count_introduced_line(stats);
     recolor_local_faces(local, M, N, best, consider_F, infinite);
     if (infinite) return;
     merge_green_green(local, stats);
+    vis_write_local(a0, a0_face, face_index, face_count, local, stats);
   }
 }
 
@@ -1484,6 +2001,10 @@ inline FT maximize_F(const Arrangement_2& arr,
                      ArrangementStats* stats = nullptr) {
   ArrangementStats local_stats;
   ArrangementStats& st = stats ? *stats : local_stats;
+  // Shows the A0 totals during vertex sampling, then each comparison
+  // line and green-green deletion as refinement inserts them.
+  LiveCounterSession live_counters(st);
+  vis_write_overview(arr, st);
   FT best = FT(0);
   bool any = false;
   bool infinite = false;
@@ -1610,14 +2131,19 @@ inline FT maximize_F(const Arrangement_2& arr,
 
   if (!refine) return any ? best : FT(0);
 
-  for (FaceWork& work : works) {
+  // face_index identifies the sampled A0 face (interior with s > 0).
+  // Faces pruned before refinement do not produce a snapshot.
+  const int face_n = static_cast<int>(works.size());
+  for (int face_i = 0; face_i < face_n; ++face_i) {
+    FaceWork& work = works[static_cast<std::size_t>(face_i)];
     if (infinite) return infinite_F();
     // Green: U(f) ≤ δ, so f cannot beat the samples already in hand.
     // Unbounded A0 faces have no finite KN bound and stay red.
     if (work.has_ub && !(best < work.ub)) continue;
     if (work.seeds.empty()) continue;
-    refine_red_a0_face(work.f, work.interior, work.seeds, M, N, grades, pl,
-                       work.has_ub, work.ub, consider_F, best, infinite, st);
+    refine_red_a0_face(arr, work.f, work.interior, work.seeds, M, N, grades, pl,
+                       work.has_ub, work.ub, consider_F, best, infinite, st,
+                       face_i, face_n);
   }
 
   return any ? best : FT(0);

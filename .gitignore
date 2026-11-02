@@ -66,6 +66,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+__pycache__/
 
 .vscode/
 tests/random_bifiltrations/

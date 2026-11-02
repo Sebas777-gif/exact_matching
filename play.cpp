@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
 
   if(argc<2) {
     std::cerr << "Usage: " << argv[0]
-              << " file.scc|file.scc_k|file.sccsum|file.bif [file2] [--dim d] [--no-cgal] [--no-refine] [--no-aida]"
+              << " file.scc|file.scc_k|file.sccsum|file.bif [file2] [--dim d] [--no-cgal] [--no-refine] [--no-aida] [--vis file.json]"
               << std::endl;
     std::exit(1);
   }
@@ -152,6 +152,12 @@ int main(int argc, char** argv) {
       refine = false;
     } else if (arg == "--no-aida") {
       preprocess = false;
+    } else if (arg == "--vis") {
+      if (i + 1 >= argc) {
+        std::cerr << "--vis needs a path" << std::endl;
+        std::exit(1);
+      }
+      matching::set_vis_dump_path(argv[++i]);
     } else if (arg == "--dim") {
       if (i + 1 >= argc) {
         std::cerr << "--dim needs an integer" << std::endl;

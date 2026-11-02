@@ -14,18 +14,27 @@
 #   ./small_instance_benchmarks.sh --max-grades 400
 #   ./small_instance_benchmarks.sh --fresh
 #
-# Default is AIDA + incremental refine (play's default). Rows append to
-# tests/small_instance_results.txt. Ctrl+C keeps completed rows and, if
-# A0 was already printed, a partial row for the pair in progress.
+# Default is AIDA + incremental refine (play's default). That run writes
+# tests/small_instance_results_refine.txt. --no-refine keeps writing
+# tests/small_instance_results.txt. Each row stores a0_lines, total_lines,
+# and green_green_deletions. Ctrl+N skips the current pair and records
+# ??? for its measurement columns. Ctrl+C keeps completed rows and, if A0
+# was already printed, a partial row for the pair in progress.
+# On a terminal, play rewrites three status lines (A0 lines, total lines,
+# and green-green deletions) in place. Abort leaves that last frame visible.
 
 set -u
 set -o pipefail
+# Each solver is its own process group, so Ctrl+N can stop that pair
+# without stopping this script.
+set -m
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 DATA_DIR="$ROOT/data_benchmarks/small_instances"
-RESULTS="$ROOT/tests/small_instance_results.txt"
+RESULTS=""
+RESULTS_WAS_SET=0
 PLAY_BIN="${PLAY_BIN:-$ROOT/build/play}"
 
 MAX_GRADES=200
@@ -50,13 +59,17 @@ Options:
   --no-refine     A0 sample only
   --refine        Incremental comparison-line refine (default)
   --fresh         Overwrite the results file instead of resuming
-  --results PATH  Results TSV (default: tests/small_instance_results.txt)
+  --results PATH  Results TSV (default: tests/small_instance_results_refine.txt,
+                  or tests/small_instance_results.txt with --no-refine)
   --play PATH     Exact solver binary (default: build/play)
   -h, --help      Show this help
 
-Ctrl+C stops the current solver and keeps completed rows. Re-run without
---fresh to skip pairs whose distance was already recorded under the same
-max-grades and flags.
+Ctrl+N skips the pair that is running and writes ??? in its measurement
+columns. That row is kept, so a later run does not retry it. Ctrl+C stops
+the suite and keeps completed rows. On a terminal, the running pair shows
+a live A0 count, total-lines count, and green-green count; abort leaves
+those lines visible. Re-run without --fresh to skip pairs whose distance
+was already recorded under the same max-grades and flags.
 EOF
 }
 
@@ -75,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         --results)
             [[ $# -ge 2 ]] || { echo "error: --results needs a path" >&2; exit 1; }
             RESULTS="$2"
+            RESULTS_WAS_SET=1
             shift 2
             ;;
         --play)
@@ -103,6 +117,15 @@ elif [[ "$USE_AIDA" -eq 1 && "$NO_REFINE" -eq 1 ]]; then
     exact_flags="AIDA --no-refine"
 else
     exact_flags="--no-aida (refine)"
+fi
+
+# Keep the existing --no-refine log. Refine runs go to their own file.
+if [[ "$RESULTS_WAS_SET" -eq 0 ]]; then
+    if [[ "$NO_REFINE" -eq 1 ]]; then
+        RESULTS="$ROOT/tests/small_instance_results.txt"
+    else
+        RESULTS="$ROOT/tests/small_instance_results_refine.txt"
+    fi
 fi
 
 if [[ ! -x "$PLAY_BIN" ]]; then
@@ -210,6 +233,10 @@ current_b=""
 exact_dist=""
 exact_sec=""
 a0_lines=""
+total_lines=""
+green_green_deletions=""
+key_reader_pid=""
+old_stty=""
 
 now() {
     if [[ -n "${EPOCHREALTIME:-}" ]]; then
@@ -236,10 +263,21 @@ normalize_dist() {
     esac
 }
 
+# Last integer on a "Label: N" line from play. Empty if the line is absent.
+field_after() {
+    local label="$1" line
+    line="$(grep -E "^${label}:" "$WORKDIR/stdout" | tail -n 1 || true)"
+    line="${line#${label}: }"
+    line="${line#"${line%%[![:space:]]*}"}"
+    printf '%s' "$line"
+}
+
 parse_play_stdout() {
     local line
     exact_dist=""
     a0_lines=""
+    total_lines=""
+    green_green_deletions=""
     if [[ ! -f "$WORKDIR/stdout" ]]; then
         return
     fi
@@ -249,15 +287,14 @@ parse_play_stdout() {
     if [[ -n "$line" ]]; then
         exact_dist="$(normalize_dist "$line")"
     fi
-    line="$(grep -E '^A0 lines:' "$WORKDIR/stdout" | tail -n 1 || true)"
-    line="${line#A0 lines: }"
-    line="${line#"${line%%[![:space:]]*}"}"
-    a0_lines="$line"
+    a0_lines="$(field_after "A0 lines")"
+    total_lines="$(field_after "Total lines")"
+    green_green_deletions="$(field_after "Green-green deletions")"
 }
 
 write_row() {
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$1" "$2" "$3" "$4" "$5" >> "$RESULTS"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$RESULTS"
 }
 
 flush_partial() {
@@ -265,26 +302,82 @@ flush_partial() {
         return
     fi
     parse_play_stdout
-    if [[ -z "$exact_dist" && -z "$a0_lines" ]]; then
+    if [[ -z "$exact_dist" && -z "$a0_lines" && -z "$total_lines" ]]; then
         return
     fi
     write_row "$current_a" "$current_b" \
-        "${exact_dist:-}" "${exact_sec:-}" "${a0_lines:-}"
+        "${exact_dist:-}" "${exact_sec:-}" \
+        "${a0_lines:-}" "${total_lines:-}" "${green_green_deletions:-}"
     current_a=""
+}
+
+# Stop play and anything it spawned (AIDA, mpfree).
+kill_child() {
+    local pid="$1"
+    [[ -n "$pid" ]] || return 0
+    kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+}
+
+restore_tty() {
+    if [[ -n "$old_stty" ]]; then
+        stty "$old_stty" < /dev/tty 2>/dev/null || true
+        old_stty=""
+    fi
+}
+
+stop_key_reader() {
+    if [[ -n "$key_reader_pid" ]]; then
+        kill -TERM "$key_reader_pid" 2>/dev/null || true
+        wait "$key_reader_pid" 2>/dev/null || true
+        key_reader_pid=""
+    fi
+    restore_tty
+}
+
+# Ctrl+N is delivered as a key, not a signal. Read it from the terminal
+# while play runs. A background read would otherwise get SIGTTIN.
+start_key_reader() {
+    [[ -r /dev/tty && -w /dev/tty ]] || return 0
+    old_stty="$(stty -g < /dev/tty 2>/dev/null || true)"
+    [[ -n "$old_stty" ]] || return 0
+    stty -icanon -echo min 1 time 0 < /dev/tty || { old_stty=""; return 0; }
+    # Same process group as this script. A background job of its own would
+    # be stopped with SIGTTIN as soon as it read the terminal.
+    set +m
+    (
+        trap '' INT TTIN
+        while IFS= read -r -n 1 key < /dev/tty; do
+            [[ "$key" == $'\x0e' ]] || continue
+            : > "$WORKDIR/skip"
+            if [[ -f "$WORKDIR/child_pid" ]]; then
+                pid="$(cat "$WORKDIR/child_pid" 2>/dev/null || true)"
+                [[ -n "$pid" ]] || continue
+                kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+    ) &
+    key_reader_pid=$!
+    set -m
 }
 
 on_exit() {
     local status=$?
     if [[ -n "$child_pid" ]]; then
-        kill -TERM "$child_pid" 2>/dev/null || true
+        kill_child "$child_pid"
         wait "$child_pid" 2>/dev/null || true
         child_pid=""
     fi
+    # stderr was a log, so the abort snapshot is not already on screen.
+    if [[ "${interrupted:-0}" -eq 1 && -s "$WORKDIR/stderr" ]]; then
+        grep -E '^(A0 lines|Total lines|Green-green deletions):' "$WORKDIR/stderr" | tail -n 3 >&2 || true
+    fi
+    stop_key_reader
     flush_partial
     rm -rf "$WORKDIR"
     return "$status"
 }
 
+interrupted=0
 on_signal() {
     interrupted=1
     echo >&2
@@ -307,8 +400,9 @@ write_header() {
 # exact: ${exact_flags}
 # play: ${PLAY_BIN}
 # files: ${#files[@]}  pairs: ${n_pairs}
+# Ctrl+N records ??? for the current pair and continues
 # Ctrl+C keeps every completed row (and a partial row if A0 lines were printed)
-file_a	file_b	exact_distance	exact_seconds	a0_lines
+file_a	file_b	exact_distance	exact_seconds	a0_lines	total_lines	green_green_deletions
 EOF
 }
 
@@ -340,11 +434,25 @@ run_timed() {
     local start end
     : > "$WORKDIR/stdout"
     : > "$WORKDIR/stderr"
+    rm -f "$WORKDIR/skip" "$WORKDIR/child_pid"
     start="$(now)"
-    "$@" > "$WORKDIR/stdout" 2> "$WORKDIR/stderr" &
+    # A terminal stderr lets play refresh the three status lines in place.
+    # Captured runs keep stderr in the log and append the snapshot on abort.
+    if [[ -t 2 ]]; then
+        "$@" > "$WORKDIR/stdout" &
+    else
+        "$@" > "$WORKDIR/stdout" 2> "$WORKDIR/stderr" &
+    fi
     child_pid=$!
+    printf '%s\n' "$child_pid" > "$WORKDIR/child_pid"
     wait "$child_pid"
     run_status=$?
+    if [[ -f "$WORKDIR/skip" ]]; then
+        kill_child "$child_pid"
+        wait "$child_pid" 2>/dev/null || true
+        skip_pair=1
+    fi
+    rm -f "$WORKDIR/child_pid"
     child_pid=""
     end="$(now)"
     run_sec="$(elapsed "$start" "$end")"
@@ -357,12 +465,16 @@ for entry in "${files[@]}"; do
 done
 echo "Pairs: $n_pairs   flags: $exact_flags" >&2
 echo "Results: $RESULTS" >&2
+echo "Ctrl+N skips the current pair (recorded as ???). Ctrl+C stops the suite." >&2
+start_key_reader
 if [[ ${#done_pairs[@]} -gt 0 ]]; then
     echo "Resuming: ${#done_pairs[@]} pair(s) already complete" >&2
 fi
 
 pair_index=0
 skipped=0
+user_skipped=0
+skip_pair=0
 for entry in "${pairs[@]}"; do
     pair_index=$((pair_index + 1))
     IFS=$'\t' read -r a_base b_base ga gb group <<<"$entry"
@@ -379,6 +491,8 @@ for entry in "${pairs[@]}"; do
     exact_dist=""
     exact_sec=""
     a0_lines=""
+    total_lines=""
+    green_green_deletions=""
 
     play_args=( "$PLAY_BIN" "$DATA_DIR/$a_base" "$DATA_DIR/$b_base" )
     if [[ "$USE_AIDA" -eq 0 ]]; then
@@ -387,29 +501,45 @@ for entry in "${pairs[@]}"; do
     if [[ "$NO_REFINE" -eq 1 ]]; then
         play_args+=( --no-refine )
     fi
+    skip_pair=0
     run_timed "${play_args[@]}"
     exact_sec="$run_sec"
+    if [[ "$skip_pair" -eq 1 ]]; then
+        if [[ -s "$WORKDIR/stderr" ]]; then
+            grep -E '^(A0 lines|Total lines|Green-green deletions):' "$WORKDIR/stderr" | tail -n 3 >&2 || true
+        fi
+        echo "    skipped  ???" >&2
+        write_row "$current_a" "$current_b" '???' '???' '???' '???' '???'
+        current_a=""
+        current_b=""
+        skip_pair=0
+        user_skipped=$((user_skipped + 1))
+        continue
+    fi
     parse_play_stdout
     if [[ "$run_status" -ne 0 || -z "$exact_dist" ]]; then
         if [[ -z "$exact_dist" ]]; then
             exact_dist="error"
         fi
-        echo "    $exact_dist  a0=${a0_lines:-?}  (${exact_sec}s, exit $run_status)" >&2
+        echo "    $exact_dist  a0=${a0_lines:-?}  total=${total_lines:-?}  green-green=${green_green_deletions:-?}  (${exact_sec}s, exit $run_status)" >&2
         if [[ -s "$WORKDIR/stderr" ]]; then
             tail -n 8 "$WORKDIR/stderr" >&2 || true
         fi
     else
-        echo "    $exact_dist  a0=$a0_lines  (${exact_sec}s)" >&2
+        echo "    $exact_dist  a0=$a0_lines  total=$total_lines  green-green=$green_green_deletions  (${exact_sec}s)" >&2
     fi
 
     write_row "$current_a" "$current_b" \
-        "$exact_dist" "$exact_sec" "${a0_lines:-}"
+        "$exact_dist" "$exact_sec" \
+        "${a0_lines:-}" "${total_lines:-}" "${green_green_deletions:-}"
     current_a=""
     current_b=""
     exact_dist=""
     exact_sec=""
     a0_lines=""
+    total_lines=""
+    green_green_deletions=""
 done
 
-echo "Done. $pair_index pairs considered, $skipped skipped (already complete)." >&2
+echo "Done. $pair_index pairs considered, $skipped skipped (already complete), $user_skipped skipped with Ctrl+N." >&2
 echo "Results: $RESULTS" >&2

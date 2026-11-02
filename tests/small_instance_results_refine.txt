@@ -1,0 +1,24 @@
+# matching-distance small_instances benchmarks
+# source: data_benchmarks/small_instances
+# rule: same suffix, each file has <= max_grades distinct bigrades
+# started: 2026-11-02T09:06:47+01:00
+# max_grades: 200
+# exact: AIDA (refine)
+# play: /home/Sebastian/exact_matching/build/play
+# files: 13  pairs: 38
+# Ctrl+N records ??? for the current pair and continues
+# Ctrl+C keeps every completed row (and a partial row if A0 lines were printed)
+file_a	file_b	exact_distance	exact_seconds	a0_lines	total_lines	green_green_deletions
+S1_eccentricity_10000_2.scc_0	cube2_eccentricity_10000_1.scc_0	0	0,030	6	6	0
+S1_eccentricity_10000_2.scc_0	cube3_eccentricity_10000_2.scc_0	0	0,030	6	6	0
+S1_eccentricity_10000_2.scc_0	torus_eccentricity_10000_1.scc_0	0	0,030	6	6	0
+cube2_eccentricity_10000_1.scc_0	cube3_eccentricity_10000_2.scc_0	0	0,031	6	6	0
+cube2_eccentricity_10000_1.scc_0	torus_eccentricity_10000_1.scc_0	0	0,032	6	6	0
+cube3_eccentricity_10000_2.scc_0	torus_eccentricity_10000_1.scc_0	0	0,032	6	6	0
+S1_eccentricity_10000_2.scc_0	S2_eccentricity_10000_2.scc_0	0	0,168	12	12	0
+S2_eccentricity_10000_2.scc_0	cube2_eccentricity_10000_1.scc_0	0	0,160	12	12	0
+S2_eccentricity_10000_2.scc_0	cube3_eccentricity_10000_2.scc_0	0	0,156	12	12	0
+S2_eccentricity_10000_2.scc_0	torus_eccentricity_10000_1.scc_0	0	0,154	12	12	0
+function_rips_with_threshold_01000000_1.scc.minpres_0	function_rips_with_threshold_01000000_2.scc.minpres_0	infinity	0,087	57	57	0
+function_rips_with_threshold_01000000_1.scc.minpres_0	function_rips_with_threshold_02000000_1.scc.minpres_0	infinity	0,122	74	74	0
+function_rips_with_threshold_01000000_2.scc.minpres_0	function_rips_with_threshold_02000000_1.scc.minpres_0	infinity	0,119	77	77	0
