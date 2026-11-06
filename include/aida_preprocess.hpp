@@ -6,12 +6,17 @@
 //   .scc / .scc_k / .minpres_k   → AIDA (already a presentation)
 //   .sccsum                      → already decomposed; read as-is
 //
-// Each file is one module. The matching distance uses the union of summand
-// grades for A0 and the concatenated slice barcodes for F.
+// Each file is one module; AIDA's indecomposable summands are its
+// presentations. A0 is built from the union of the grades of all summands.
+//
+// mpfree and AIDA communicate through files. Each load_module call writes
+// them to its own folder /tmp/exact_matching_XXXXXX, which is deleted when
+// the call returns or throws.
 
 #include "bif_io.hpp"
 #include "scc_io.hpp"
 
+#include <dirent.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -90,19 +95,53 @@ inline void run_cmd(const std::string& cmd, const std::string& what)
             + "). Set $MPFREE / $AIDA, or pass --no-aida.");
 }
 
-inline std::string temp_stem(const std::string& input)
+// A fresh folder for intermediate files. The destructor deletes the folder
+// and everything in it, so it disappears when the TempDir goes out of scope,
+// also when an exception is thrown.
+class TempDir
 {
-    static std::string dir;
-    if (dir.empty()) {
+public:
+    TempDir()
+    {
         char buf[] = "/tmp/exact_matching_XXXXXX";
         if (!mkdtemp(buf))
             throw std::runtime_error("mkdtemp failed");
-        dir = buf;
+        path_ = buf;
     }
-    auto slash = input.find_last_of('/');
-    std::string base = slash == std::string::npos ? input : input.substr(slash + 1);
-    return dir + "/" + base;
-}
+
+    ~TempDir()
+    {
+        // Collect the names first: deleting while reading the folder
+        // is not guaranteed to visit every entry.
+        std::vector<std::string> names;
+        if (DIR* d = opendir(path_.c_str())) {
+            while (dirent* e = readdir(d)) {
+                const std::string name = e->d_name;
+                if (name != "." && name != "..")
+                    names.push_back(name);
+            }
+            closedir(d);
+        }
+        for (const std::string& name : names)
+            unlink((path_ + "/" + name).c_str());
+        rmdir(path_.c_str());
+    }
+
+    // A TempDir owns its folder, so it must not be copied.
+    TempDir(const TempDir&) = delete;
+    TempDir& operator=(const TempDir&) = delete;
+
+    // Path in this folder named after the input file, plus a suffix.
+    std::string file_for(const std::string& input, const std::string& suffix) const
+    {
+        const auto slash = input.find_last_of('/');
+        const std::string base = slash == std::string::npos ? input : input.substr(slash + 1);
+        return path_ + "/" + base + suffix;
+    }
+
+private:
+    std::string path_;
+};
 
 inline matching::Module presentations_to_module(std::vector<matching::Presentation> summands)
 {
@@ -111,10 +150,11 @@ inline matching::Module presentations_to_module(std::vector<matching::Presentati
     return M;
 }
 
-inline matching::Module run_aida_on_presentation(const std::string& scc_path)
+inline matching::Module run_aida_on_presentation(const std::string& scc_path,
+                                                 const TempDir& tmp)
 {
     const std::string aida = find_aida();
-    const std::string out = temp_stem(scc_path) + ".sccsum";
+    const std::string out = tmp.file_for(scc_path, ".sccsum");
     const std::string cmd = shell_quote(aida) + " -l -o " + shell_quote(out)
         + " " + shell_quote(scc_path);
     run_cmd(cmd, "aida");
@@ -124,11 +164,11 @@ inline matching::Module run_aida_on_presentation(const std::string& scc_path)
     return presentations_to_module(read_scc_presentations(out));
 }
 
-inline std::string mpfree_presentation_from_bif(const std::string& bif_path, int homology_dim)
+inline std::string mpfree_presentation_from_bif(const std::string& bif_path, int homology_dim,
+                                               const TempDir& tmp)
 {
-    const std::string stem = temp_stem(bif_path);
-    const std::string chain = stem + ".chain.scc";
-    const std::string presentation = stem + ".scc";
+    const std::string chain = tmp.file_for(bif_path, ".chain.scc");
+    const std::string presentation = tmp.file_for(bif_path, ".scc");
     write_chain_complex_scc(chain, read_bif(bif_path), homology_dim);
 
     const std::string mpfree = find_mpfree();
@@ -157,12 +197,13 @@ inline matching::Module load_module(const std::string& path, int homology_dim,
         return presentations_to_module(read_scc_presentations(path));
     }
 
+    TempDir tmp;  // deleted with its contents when this function exits
     if (is_bif_path(path)) {
-        const std::string scc = mpfree_presentation_from_bif(path, homology_dim);
-        return run_aida_on_presentation(scc);
+        const std::string scc = mpfree_presentation_from_bif(path, homology_dim, tmp);
+        return run_aida_on_presentation(scc, tmp);
     }
     if (is_scc_path(path))
-        return run_aida_on_presentation(path);
+        return run_aida_on_presentation(path, tmp);
     throw std::runtime_error("unrecognized input " + path
         + " (expected .bif, .scc, .scc_k, .minpres_k, or .sccsum)");
 }

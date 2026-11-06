@@ -1,7 +1,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <matching_distance.h>
@@ -10,7 +9,8 @@
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " file.scc|file.scc_k|file.sccsum|file.bif [file2] [--dim d] [--no-aida]"
+              << " file1 file2 [--dim d] [--no-aida]"
+              << " (each file .scc, .scc_k, .minpres_k, .sccsum, or .bif)"
               << std::endl;
     std::exit(1);
   }
@@ -41,8 +41,9 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (input_files.empty()) {
-    std::cerr << "No input file given" << std::endl;
+  if (input_files.size() != 2) {
+    std::cerr << "Expected two input files (one module each), got "
+              << input_files.size() << std::endl;
     std::exit(1);
   }
 
@@ -56,30 +57,9 @@ int main(int argc, char** argv) {
     std::exit(1);
   }
 
-  // One file with exactly two presentations: the two scc2020 blocks are the two modules.
-  if (modules.size() == 1 && modules[0].summands.size() == 2) {
-    matching::Module A = matching::as_module(modules[0].summands[0]);
-    matching::Module B = matching::as_module(modules[0].summands[1]);
-    modules.clear();
-    modules.push_back(std::move(A));
-    modules.push_back(std::move(B));
-  }
-
-  std::cout << "Loaded " << modules.size() << " module(s)";
-  if (!modules.empty()) {
-    std::cout << " with";
-    for (std::size_t i = 0; i < modules.size(); ++i) {
-      if (i) std::cout << " and";
-      std::cout << " " << modules[i].summands.size() << " summand(s)";
-    }
-  }
-  std::cout << std::endl;
-
-  if (modules.size() != 2) {
-    std::cerr << "A0 needs two modules (two files, or one file with two scc2020 blocks)"
-              << std::endl;
-    std::exit(1);
-  }
+  std::cout << "Loaded 2 module(s) with " << modules[0].summands.size()
+            << " summand(s) and " << modules[1].summands.size() << " summand(s)"
+            << std::endl;
 
   matching::Arrangement_2 arr;
   const std::size_t nlines = matching::build_arrangement_A(arr, modules[0], modules[1]);

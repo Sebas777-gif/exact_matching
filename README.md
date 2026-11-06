@@ -106,22 +106,20 @@ mpfree and AIDA: a `.bif` is converted in-process to a (generally non-minimal)
 presentation of $H_d$ by taking $d$-simplices as generators and
 $(d+1)$-simplices as relations.
 
-$A_0$ is built for **two modules** (two files, or one file with exactly two
-`scc2020` blocks). The two files may mix `.scc`, `.scc_k`, `.minpres_k`,
-`.sccsum`, and `.bif`.
+$A_0$ is built for **two modules**, given as exactly two files (one module
+each). The two files may mix `.scc`, `.scc_k`, `.minpres_k`, `.sccsum`, and
+`.bif`. A file with several `scc2020` blocks is one module whose summands are
+those blocks; it is not split into two modules.
 
 Set `$MPFREE` and `$AIDA` (or `$AIDA_WITHOUT_STATS`) if the binaries are not
-on `PATH`.
+on `PATH`. Their input and output files go to a fresh folder
+`/tmp/exact_matching_XXXXXX` per input file, which is deleted once the file
+has been loaded (also on errors). A process that is killed while mpfree or
+AIDA runs can leave that folder behind.
 
 ## Usage
 
-Two presentations in one file (two `scc2020` blocks):
-
-```bash
-./play modules.scc
-```
-
-Two files, one presentation or bifiltration each:
+Two files, one module each:
 
 ```bash
 ./play module_a.scc module_b.scc
@@ -184,8 +182,7 @@ Arrangement has 4 vertices, 15 edges, and 12 faces
 In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
 dual lines and $s=1$ all meet at $(s,t)=(1,0)$, which leaves 4 vertices.
 
-If the input does not give exactly two modules, the program exits with an
-error.
+If not exactly two input files are given, the program exits with an error.
 
 ## Complexity
 
