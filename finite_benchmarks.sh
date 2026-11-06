@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# The 18 pairs from tests/results.txt whose --no-refine distance was finite
-# (the rest of random_bifiltrations are infinity in ~1-3s). Old times were
-# 3-104 minutes; AIDA+refine is the open question this script is for.
+# The 18 pairs from tests/results.txt whose old (--no-refine) distance was
+# finite (the rest of random_bifiltrations are infinity in ~1-3s). Old
+# times were 3-104 minutes.
+#
+# play currently builds A0 and nothing more (no matching distance). Each
+# row stores the A0 line count, the vertex/edge/face counts, and the wall
+# time, plus Hera's distance as a reference if Hera is found.
 #
 # Usage:
-#   ./finite_benchmarks.sh --old          # --no-aida --no-refine (Oct 21 setting)
-#   ./finite_benchmarks.sh --new          # AIDA + incremental refine (play default)
-#   ./finite_benchmarks.sh --new --fresh
-#   ./finite_benchmarks.sh --aida --no-refine
+#   ./finite_benchmarks.sh                # AIDA (play default)
+#   ./finite_benchmarks.sh --no-aida
+#   ./finite_benchmarks.sh --fresh
 #
-# Default is --new. Results go to tests/finite_results_<mode>.txt unless
-# --results PATH is given. Ctrl+C keeps completed rows and any partial
-# measurements for the pair in progress.
+# Results go to tests/finite_results_a0_<mode>.txt unless --results PATH
+# is given. Ctrl+C keeps completed rows and any partial measurements for
+# the pair in progress.
 
 set -u
 set -o pipefail
@@ -26,33 +29,28 @@ HERA_BIN="${HERA_BIN:-}"
 dim=0
 fresh=0
 USE_AIDA=1
-NO_REFINE=0
+USE_HERA=1
 RESULTS=""
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [options]
 
-Re-run the 18 finite-distance pairs from tests/results.txt (dim 0,
---no-refine). Those were the only pairs in the first 1577 random
-bifiltration comparisons that did not return infinity.
+Build A0 for the 18 finite-distance pairs from tests/results.txt (dim 0,
+old --no-refine). Those were the only pairs in the first 1577 random
+bifiltration comparisons that did not return infinity. play prints no
+distance yet; Hera's distance is recorded as a reference.
 
 Options:
-  --old           --no-aida --no-refine (setting of tests/results.txt)
-  --new           AIDA + incremental refine (play default)
   --no-aida       skip mpfree/AIDA
-  --aida          use play's default preprocess (mpfree then AIDA)
-  --no-refine     A0 sample only
-  --refine        incremental comparison-line refine
+  --aida          use play's default preprocess (mpfree then AIDA, default)
   --dim N         Homology dimension (default: 0, matching results.txt)
   --fresh         Overwrite the results file instead of resuming
-  --results PATH  Results TSV (default: tests/finite_results_<mode>.txt)
-  --play PATH     Exact solver binary (default: build/play)
+  --results PATH  Results TSV (default: tests/finite_results_a0_<mode>.txt)
+  --play PATH     play binary (default: build/play)
   --hera PATH     Hera matching_dist binary
+  --no-hera       Do not run Hera
   -h, --help      Show this help
-
-Default is --new. --old / --new set both preprocess and refine; the
-individual flags may follow to mix them (e.g. --new --no-refine).
 
 Ctrl+C stops the current solver, writes any finished measurements for
 the pair in progress, and exits. Re-run without --fresh to skip pairs
@@ -62,12 +60,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --old) USE_AIDA=0; NO_REFINE=1; shift ;;
-        --new) USE_AIDA=1; NO_REFINE=0; shift ;;
         --no-aida) USE_AIDA=0; shift ;;
         --aida) USE_AIDA=1; shift ;;
-        --no-refine) NO_REFINE=1; shift ;;
-        --refine) NO_REFINE=0; shift ;;
+        --no-hera) USE_HERA=0; shift ;;
         --dim)
             [[ $# -ge 2 ]] || { echo "error: --dim needs an integer" >&2; exit 1; }
             dim="$2"
@@ -98,25 +93,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "$USE_AIDA" -eq 0 && "$NO_REFINE" -eq 1 ]]; then
-    mode_tag="old"
-    exact_flags="--no-aida --no-refine"
-elif [[ "$USE_AIDA" -eq 1 && "$NO_REFINE" -eq 0 ]]; then
-    mode_tag="new"
-    exact_flags="AIDA (refine)"
-elif [[ "$USE_AIDA" -eq 1 && "$NO_REFINE" -eq 1 ]]; then
-    mode_tag="aida_norefine"
-    exact_flags="AIDA --no-refine"
+if [[ "$USE_AIDA" -eq 1 ]]; then
+    mode_tag="aida"
+    play_flags="A0 only, AIDA"
 else
-    mode_tag="noaida_refine"
-    exact_flags="--no-aida (refine)"
+    mode_tag="noaida"
+    play_flags="A0 only, --no-aida"
 fi
 
 if [[ -z "$RESULTS" ]]; then
-    RESULTS="$ROOT/tests/finite_results_${mode_tag}.txt"
+    RESULTS="$ROOT/tests/finite_results_a0_${mode_tag}.txt"
 fi
 
-if [[ -z "$HERA_BIN" ]]; then
+if [[ "$USE_HERA" -eq 1 && -z "$HERA_BIN" ]]; then
     for candidate in \
         "$HOME/hera_aida_matching/extern/hera/build/matching/matching_dist" \
         "$ROOT/../hera_aida_matching/extern/hera/build/matching/matching_dist" \
@@ -133,22 +122,27 @@ if [[ -z "$HERA_BIN" ]]; then
 fi
 
 if [[ ! -x "$PLAY_BIN" ]]; then
-    echo "error: exact solver not found or not executable: $PLAY_BIN" >&2
+    echo "error: play not found or not executable: $PLAY_BIN" >&2
     echo "Build it with: cmake -S . -B build && cmake --build build" >&2
     exit 1
 fi
-if [[ -z "$HERA_BIN" || ! -x "$HERA_BIN" ]]; then
-    echo "error: Hera matching_dist not found. Pass --hera PATH." >&2
-    exit 1
+if [[ "$USE_HERA" -eq 1 && ( -z "$HERA_BIN" || ! -x "$HERA_BIN" ) ]]; then
+    echo "warning: Hera matching_dist not found; reference column skipped. Pass --hera PATH." >&2
+    USE_HERA=0
+fi
+if [[ "$USE_HERA" -eq 0 ]]; then
+    HERA_BIN="(skipped)"
 fi
 if [[ ! -d "$BIF_DIR" ]]; then
     echo "error: missing directory $BIF_DIR" >&2
     exit 1
 fi
 
-# Finite dim-0 pairs from tests/results.txt (exact: --no-refine, started
+# Finite dim-0 pairs from tests/results.txt (old --no-refine, started
 # 2026-10-21). Ordered by that run's exact_seconds, shortest first.
-# Columns: file_a, file_b, old exact seconds, old exact distance, hera.
+# Columns: file_a, file_b, old seconds, old --no-refine distance, hera.
+# The old distances come from an early version of F on A0 (before the
+# unbounded-face fixes); several are far above Hera. Trust Hera's column.
 pairs=(
     "r_bif_v_100_dim_2_n_top_simplices_100_sample_3.bif	r_bif_v_100_dim_5_n_top_simplices_100_sample_9.bif	185.498	85	34.4853"
     "r_bif_v_100_dim_2_n_top_simplices_100_sample_3.bif	r_bif_v_100_dim_5_n_top_simplices_100_sample_5.bif	223.486	39.5	39.2855"
@@ -189,11 +183,13 @@ WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/md-finite-bench.XXXXXX")"
 child_pid=""
 current_a=""
 current_b=""
-exact_dist=""
-exact_sec=""
+a0_lines=""
+a0_vertices=""
+a0_edges=""
+a0_faces=""
+play_sec=""
 hera_dist=""
 hera_sec=""
-interrupted=0
 
 now() {
     if [[ -n "${EPOCHREALTIME:-}" ]]; then
@@ -205,6 +201,14 @@ now() {
 
 elapsed() {
     awk -v s="$1" -v e="$2" 'BEGIN { printf "%.3f", e - s }'
+}
+
+# A0 line count and arrangement size from play's stdout.
+parse_play_stdout() {
+    read -r a0_lines a0_vertices a0_edges a0_faces < <(awk '
+        /^A0 lines:/ { l = $3 }
+        /^Arrangement has/ { v = $3; e = $5; f = $8 }
+        END { print l, v, e, f }' "$WORKDIR/stdout")
 }
 
 normalize_dist() {
@@ -221,20 +225,20 @@ normalize_dist() {
 }
 
 write_row() {
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$1" "$2" "$3" "$4" "$5" "$6" >> "$RESULTS"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" >> "$RESULTS"
 }
 
 flush_partial() {
     if [[ -z "$current_a" ]]; then
         return
     fi
-    if [[ -z "$exact_dist" && -z "$hera_dist" ]]; then
+    if [[ -z "$a0_lines" && -z "$hera_dist" ]]; then
         return
     fi
     write_row "$current_a" "$current_b" \
-        "${exact_dist:-}" "${exact_sec:-}" \
-        "${hera_dist:-}" "${hera_sec:-}"
+        "${a0_lines:-}" "${a0_vertices:-}" "${a0_edges:-}" "${a0_faces:-}" \
+        "${play_sec:-}" "${hera_dist:-}" "${hera_sec:-}"
     current_a=""
 }
 
@@ -251,7 +255,6 @@ on_exit() {
 }
 
 on_signal() {
-    interrupted=1
     echo >&2
     echo "Interrupted. Results so far are in $RESULTS" >&2
     exit 130
@@ -264,24 +267,24 @@ write_header() {
     local started
     started="$(date -Iseconds 2>/dev/null || date)"
     cat > "$RESULTS" <<EOF
-# matching-distance finite-pair benchmarks
-# source: 18 finite rows of tests/results.txt (dim 0, --no-refine)
+# A0 finite-pair benchmarks
+# source: 18 finite rows of tests/results.txt (dim 0, old --no-refine)
 # started: ${started}
 # dim: ${dim}
-# exact: ${exact_flags}
+# play_flags: ${play_flags}
 # play: ${PLAY_BIN}
 # hera: ${HERA_BIN}
 # pairs: ${n_pairs}
 # Ctrl+C keeps every completed row (and a partial row for the pair in progress)
-file_a	file_b	exact_distance	exact_seconds	hera_distance	hera_seconds
+file_a	file_b	a0_lines	vertices	edges	faces	seconds	hera_distance	hera_seconds
 EOF
 }
 
 header_matches() {
-    local got_dim got_exact
+    local got_dim got_flags
     got_dim="$(awk -F': ' '/^# dim:/{print $2; exit}' "$RESULTS")"
-    got_exact="$(awk -F': ' '/^# exact:/{print $2; exit}' "$RESULTS")"
-    [[ "$got_dim" == "$dim" && "$got_exact" == "$exact_flags" ]]
+    got_flags="$(awk -F': ' '/^# play_flags:/{print $2; exit}' "$RESULTS")"
+    [[ "$got_dim" == "$dim" && "$got_flags" == "$play_flags" ]]
 }
 
 declare -A done_pairs=()
@@ -289,13 +292,13 @@ if [[ "$fresh" -eq 1 || ! -f "$RESULTS" ]]; then
     write_header
 else
     if ! header_matches; then
-        echo "error: $RESULTS was produced with different dim/exact settings." >&2
+        echo "error: $RESULTS was produced with different dim/play settings." >&2
         echo "Pass --fresh to overwrite, or reuse the same flags / --results." >&2
         exit 1
     fi
-    while IFS=$'\t' read -r a b e_dist e_sec h_dist h_sec; do
+    while IFS=$'\t' read -r a b a0 _v _e _f _s h_dist _hs; do
         [[ -z "${a:-}" || "$a" == \#* || "$a" == file_a ]] && continue
-        if [[ -n "${e_dist:-}" && -n "${h_dist:-}" ]]; then
+        if [[ -n "${a0:-}" && -n "${h_dist:-}" ]]; then
             done_pairs["$a"$'\t'"$b"]=1
         fi
     done < "$RESULTS"
@@ -316,7 +319,7 @@ run_timed() {
 }
 
 echo "Finite-pair benchmark: $n_pairs pairs from tests/results.txt" >&2
-echo "  play: $PLAY_BIN  flags: --dim $dim  ${exact_flags}" >&2
+echo "  play: $PLAY_BIN  flags: --dim $dim  ${play_flags}" >&2
 echo "  hera: $HERA_BIN  flags: -d $dim" >&2
 echo "  results: $RESULTS" >&2
 if [[ ${#done_pairs[@]} -gt 0 ]]; then
@@ -341,55 +344,55 @@ for entry in "${pairs[@]}"; do
 
     current_a="$a_base"
     current_b="$b_base"
-    exact_dist=""
-    exact_sec=""
+    a0_lines=""
+    a0_vertices=""
+    a0_edges=""
+    a0_faces=""
+    play_sec=""
     hera_dist=""
     hera_sec=""
 
-    echo "  hera..." >&2
-    run_timed "$HERA_BIN" -d "$dim" "$a_path" "$b_path"
-    hera_sec="$run_sec"
-    if [[ "$run_status" -eq 0 ]]; then
-        hera_line="$(tail -n 1 "$WORKDIR/stdout" 2>/dev/null || true)"
-        hera_dist="$(normalize_dist "$hera_line")"
-        if [[ -z "$hera_dist" ]]; then
+    if [[ "$USE_HERA" -eq 1 ]]; then
+        echo "  hera..." >&2
+        run_timed "$HERA_BIN" -d "$dim" "$a_path" "$b_path"
+        hera_sec="$run_sec"
+        if [[ "$run_status" -eq 0 ]]; then
+            hera_line="$(tail -n 1 "$WORKDIR/stdout" 2>/dev/null || true)"
+            hera_dist="$(normalize_dist "$hera_line")"
+            if [[ -z "$hera_dist" ]]; then
+                hera_dist="error"
+            fi
+        else
             hera_dist="error"
         fi
+        echo "    $hera_dist  (${hera_sec}s)" >&2
     else
-        hera_dist="error"
+        hera_dist="skip"
     fi
-    echo "    $hera_dist  (${hera_sec}s)" >&2
 
-    echo "  exact..." >&2
+    echo "  A0..." >&2
     play_args=( "$PLAY_BIN" "$a_path" "$b_path" --dim "$dim" )
     if [[ "$USE_AIDA" -eq 0 ]]; then
         play_args+=( --no-aida )
     fi
-    if [[ "$NO_REFINE" -eq 1 ]]; then
-        play_args+=( --no-refine )
-    fi
     run_timed "${play_args[@]}"
-    exact_sec="$run_sec"
-    if [[ "$run_status" -eq 0 ]]; then
-        exact_line="$(grep -E '^Matching distance:' "$WORKDIR/stdout" | tail -n 1 || true)"
-        exact_line="${exact_line#Matching distance: }"
-        exact_dist="$(normalize_dist "$exact_line")"
-        if [[ -z "$exact_dist" ]]; then
-            exact_dist="error"
-        fi
+    play_sec="$run_sec"
+    parse_play_stdout
+    if [[ "$run_status" -ne 0 || -z "$a0_lines" || -z "$a0_vertices" ]]; then
+        a0_lines="error"
+        echo "    error  (${play_sec}s, exit $run_status)" >&2
+        tail -n 8 "$WORKDIR/stderr" >&2 || true
     else
-        exact_dist="error"
+        echo "    $a0_lines lines, $a0_vertices vertices, $a0_edges edges, $a0_faces faces  (${play_sec}s)" >&2
     fi
-    echo "    $exact_dist  (${exact_sec}s)" >&2
 
     write_row "$current_a" "$current_b" \
-        "$exact_dist" "$exact_sec" "$hera_dist" "$hera_sec"
+        "$a0_lines" "$a0_vertices" "$a0_edges" "$a0_faces" \
+        "$play_sec" "$hera_dist" "$hera_sec"
     current_a=""
     current_b=""
-    exact_dist=""
-    exact_sec=""
+    a0_lines=""
     hera_dist=""
-    hera_sec=""
 done
 
 echo "Done. $pair_index pairs considered, $skipped skipped (already complete)." >&2

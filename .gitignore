@@ -74,5 +74,8 @@ tests/results.txt
 tests/refined_results.txt
 tests/finite_results_new.txt
 tests/small_instance_results.txt
+tests/results_a0.txt
+tests/finite_results_a0_*.txt
+tests/small_instance_results_a0.txt
 data_benchmarks/
 

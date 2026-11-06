@@ -10,18 +10,17 @@
 # The trailing index is reflected homology (.scc_2 is H_0), not --dim.
 #
 #   ./small_instance_benchmarks.sh
-#   ./small_instance_benchmarks.sh --no-refine
+#   ./small_instance_benchmarks.sh --no-aida
 #   ./small_instance_benchmarks.sh --max-grades 400
 #   ./small_instance_benchmarks.sh --fresh
 #
-# Default is AIDA + incremental refine (play's default). That run writes
-# tests/small_instance_results_refine.txt. --no-refine keeps writing
-# tests/small_instance_results.txt. Each row stores a0_lines, total_lines,
-# and green_green_deletions. Ctrl+N skips the current pair and records
-# ??? for its measurement columns. Ctrl+C keeps completed rows and, if A0
-# was already printed, a partial row for the pair in progress.
-# On a terminal, play rewrites three status lines (A0 lines, total lines,
-# and green-green deletions) in place. Abort leaves that last frame visible.
+# play currently builds A0 and nothing more (no matching distance). Each
+# row stores the A0 line count, the vertex/edge/face counts of the
+# arrangement, and the wall time (AIDA preprocessing included unless
+# --no-aida). Results go to tests/small_instance_results_a0.txt. The old
+# distance logs (small_instance_results.txt, *_refine.txt) are not touched.
+# Ctrl+N skips the current pair and records ??? for its measurement
+# columns. Ctrl+C keeps completed rows.
 
 set -u
 set -o pipefail
@@ -40,7 +39,6 @@ PLAY_BIN="${PLAY_BIN:-$ROOT/build/play}"
 MAX_GRADES=200
 fresh=0
 USE_AIDA=1
-NO_REFINE=0
 
 usage() {
     cat <<EOF
@@ -56,20 +54,15 @@ Options:
   --max-grades N  Per-file unique-grade cap (default: 200)
   --no-aida       Skip AIDA (presentations are already minimal)
   --aida          Run AIDA (default)
-  --no-refine     A0 sample only
-  --refine        Incremental comparison-line refine (default)
   --fresh         Overwrite the results file instead of resuming
-  --results PATH  Results TSV (default: tests/small_instance_results_refine.txt,
-                  or tests/small_instance_results.txt with --no-refine)
-  --play PATH     Exact solver binary (default: build/play)
+  --results PATH  Results TSV (default: tests/small_instance_results_a0.txt)
+  --play PATH     play binary (default: build/play)
   -h, --help      Show this help
 
 Ctrl+N skips the pair that is running and writes ??? in its measurement
 columns. That row is kept, so a later run does not retry it. Ctrl+C stops
-the suite and keeps completed rows. On a terminal, the running pair shows
-a live A0 count, total-lines count, and green-green count; abort leaves
-those lines visible. Re-run without --fresh to skip pairs whose distance
-was already recorded under the same max-grades and flags.
+the suite and keeps completed rows. Re-run without --fresh to skip pairs
+already recorded under the same max-grades and flags.
 EOF
 }
 
@@ -82,8 +75,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-aida) USE_AIDA=0; shift ;;
         --aida) USE_AIDA=1; shift ;;
-        --no-refine) NO_REFINE=1; shift ;;
-        --refine) NO_REFINE=0; shift ;;
         --fresh) fresh=1; shift ;;
         --results)
             [[ $# -ge 2 ]] || { echo "error: --results needs a path" >&2; exit 1; }
@@ -109,27 +100,18 @@ case "$MAX_GRADES" in
     ''|*[!0-9]*) echo "error: --max-grades must be a non-negative integer" >&2; exit 1 ;;
 esac
 
-if [[ "$USE_AIDA" -eq 0 && "$NO_REFINE" -eq 1 ]]; then
-    exact_flags="--no-aida --no-refine"
-elif [[ "$USE_AIDA" -eq 1 && "$NO_REFINE" -eq 0 ]]; then
-    exact_flags="AIDA (refine)"
-elif [[ "$USE_AIDA" -eq 1 && "$NO_REFINE" -eq 1 ]]; then
-    exact_flags="AIDA --no-refine"
+if [[ "$USE_AIDA" -eq 1 ]]; then
+    play_flags="A0 only, AIDA"
 else
-    exact_flags="--no-aida (refine)"
+    play_flags="A0 only, --no-aida"
 fi
 
-# Keep the existing --no-refine log. Refine runs go to their own file.
 if [[ "$RESULTS_WAS_SET" -eq 0 ]]; then
-    if [[ "$NO_REFINE" -eq 1 ]]; then
-        RESULTS="$ROOT/tests/small_instance_results.txt"
-    else
-        RESULTS="$ROOT/tests/small_instance_results_refine.txt"
-    fi
+    RESULTS="$ROOT/tests/small_instance_results_a0.txt"
 fi
 
 if [[ ! -x "$PLAY_BIN" ]]; then
-    echo "error: exact solver not found or not executable: $PLAY_BIN" >&2
+    echo "error: play not found or not executable: $PLAY_BIN" >&2
     echo "Build it with: cmake -S . -B build && cmake --build build" >&2
     exit 1
 fi
@@ -228,13 +210,11 @@ fi
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/md-small-inst.XXXXXX")"
 child_pid=""
-current_a=""
-current_b=""
-exact_dist=""
-exact_sec=""
+play_sec=""
 a0_lines=""
-total_lines=""
-green_green_deletions=""
+a0_vertices=""
+a0_edges=""
+a0_faces=""
 key_reader_pid=""
 old_stty=""
 
@@ -250,65 +230,24 @@ elapsed() {
     awk -v s="$1" -v e="$2" 'BEGIN { printf "%.3f", e - s }'
 }
 
-normalize_dist() {
-    local raw
-    raw="$(printf '%s' "$1" | tr -d '[:space:]')"
-    case "$raw" in
-        inf|Inf|INF|infinity|Infinity|+inf|+Inf|+INF)
-            printf 'infinity'
-            ;;
-        *)
-            printf '%s' "$raw"
-            ;;
-    esac
-}
-
-# Last integer on a "Label: N" line from play. Empty if the line is absent.
-field_after() {
-    local label="$1" line
-    line="$(grep -E "^${label}:" "$WORKDIR/stdout" | tail -n 1 || true)"
-    line="${line#${label}: }"
-    line="${line#"${line%%[![:space:]]*}"}"
-    printf '%s' "$line"
-}
-
+# A0 line count and arrangement size from play's stdout. Empty if absent.
 parse_play_stdout() {
-    local line
-    exact_dist=""
     a0_lines=""
-    total_lines=""
-    green_green_deletions=""
+    a0_vertices=""
+    a0_edges=""
+    a0_faces=""
     if [[ ! -f "$WORKDIR/stdout" ]]; then
         return
     fi
-    line="$(grep -E '^Matching distance:' "$WORKDIR/stdout" | tail -n 1 || true)"
-    line="${line#Matching distance: }"
-    line="${line#"${line%%[![:space:]]*}"}"
-    if [[ -n "$line" ]]; then
-        exact_dist="$(normalize_dist "$line")"
-    fi
-    a0_lines="$(field_after "A0 lines")"
-    total_lines="$(field_after "Total lines")"
-    green_green_deletions="$(field_after "Green-green deletions")"
+    read -r a0_lines a0_vertices a0_edges a0_faces < <(awk '
+        /^A0 lines:/ { l = $3 }
+        /^Arrangement has/ { v = $3; e = $5; f = $8 }
+        END { print l, v, e, f }' "$WORKDIR/stdout")
 }
 
 write_row() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$RESULTS"
-}
-
-flush_partial() {
-    if [[ -z "$current_a" ]]; then
-        return
-    fi
-    parse_play_stdout
-    if [[ -z "$exact_dist" && -z "$a0_lines" && -z "$total_lines" ]]; then
-        return
-    fi
-    write_row "$current_a" "$current_b" \
-        "${exact_dist:-}" "${exact_sec:-}" \
-        "${a0_lines:-}" "${total_lines:-}" "${green_green_deletions:-}"
-    current_a=""
 }
 
 # Stop play and anything it spawned (AIDA, mpfree).
@@ -367,19 +306,12 @@ on_exit() {
         wait "$child_pid" 2>/dev/null || true
         child_pid=""
     fi
-    # stderr was a log, so the abort snapshot is not already on screen.
-    if [[ "${interrupted:-0}" -eq 1 && -s "$WORKDIR/stderr" ]]; then
-        grep -E '^(A0 lines|Total lines|Green-green deletions):' "$WORKDIR/stderr" | tail -n 3 >&2 || true
-    fi
     stop_key_reader
-    flush_partial
     rm -rf "$WORKDIR"
     return "$status"
 }
 
-interrupted=0
 on_signal() {
-    interrupted=1
     echo >&2
     echo "Interrupted. Results so far are in $RESULTS" >&2
     exit 130
@@ -392,25 +324,25 @@ write_header() {
     local started
     started="$(date -Iseconds 2>/dev/null || date)"
     cat > "$RESULTS" <<EOF
-# matching-distance small_instances benchmarks
+# A0 small_instances benchmarks
 # source: data_benchmarks/small_instances
 # rule: same suffix, each file has <= max_grades distinct bigrades
 # started: ${started}
 # max_grades: ${MAX_GRADES}
-# exact: ${exact_flags}
+# play_flags: ${play_flags}
 # play: ${PLAY_BIN}
 # files: ${#files[@]}  pairs: ${n_pairs}
 # Ctrl+N records ??? for the current pair and continues
-# Ctrl+C keeps every completed row (and a partial row if A0 lines were printed)
-file_a	file_b	exact_distance	exact_seconds	a0_lines	total_lines	green_green_deletions
+# Ctrl+C keeps every completed row
+file_a	file_b	a0_lines	vertices	edges	faces	seconds
 EOF
 }
 
 header_matches() {
-    local got_max got_exact
+    local got_max got_flags
     got_max="$(awk -F': ' '/^# max_grades:/{print $2; exit}' "$RESULTS")"
-    got_exact="$(awk -F': ' '/^# exact:/{print $2; exit}' "$RESULTS")"
-    [[ "$got_max" == "$MAX_GRADES" && "$got_exact" == "$exact_flags" ]]
+    got_flags="$(awk -F': ' '/^# play_flags:/{print $2; exit}' "$RESULTS")"
+    [[ "$got_max" == "$MAX_GRADES" && "$got_flags" == "$play_flags" ]]
 }
 
 declare -A done_pairs=()
@@ -422,9 +354,9 @@ else
         echo "Pass --fresh to overwrite, or reuse the same options." >&2
         exit 1
     fi
-    while IFS=$'\t' read -r a b e_dist e_sec a0; do
+    while IFS=$'\t' read -r a b a0 _rest; do
         [[ -z "${a:-}" || "$a" == \#* || "$a" == file_a ]] && continue
-        if [[ -n "${e_dist:-}" ]]; then
+        if [[ -n "${a0:-}" ]]; then
             done_pairs["$a"$'\t'"$b"]=1
         fi
     done < "$RESULTS"
@@ -436,13 +368,7 @@ run_timed() {
     : > "$WORKDIR/stderr"
     rm -f "$WORKDIR/skip" "$WORKDIR/child_pid"
     start="$(now)"
-    # A terminal stderr lets play refresh the three status lines in place.
-    # Captured runs keep stderr in the log and append the snapshot on abort.
-    if [[ -t 2 ]]; then
-        "$@" > "$WORKDIR/stdout" &
-    else
-        "$@" > "$WORKDIR/stdout" 2> "$WORKDIR/stderr" &
-    fi
+    "$@" > "$WORKDIR/stdout" 2> "$WORKDIR/stderr" &
     child_pid=$!
     printf '%s\n' "$child_pid" > "$WORKDIR/child_pid"
     wait "$child_pid"
@@ -463,7 +389,7 @@ for entry in "${files[@]}"; do
     IFS=$'\t' read -r name group n <<<"$entry"
     echo "  $n grades  $group  $name" >&2
 done
-echo "Pairs: $n_pairs   flags: $exact_flags" >&2
+echo "Pairs: $n_pairs   flags: $play_flags" >&2
 echo "Results: $RESULTS" >&2
 echo "Ctrl+N skips the current pair (recorded as ???). Ctrl+C stops the suite." >&2
 start_key_reader
@@ -486,59 +412,32 @@ for entry in "${pairs[@]}"; do
 
     echo "[$pair_index/$n_pairs] $group  $a_base  vs  $b_base  (grades $ga + $gb)" >&2
 
-    current_a="$a_base"
-    current_b="$b_base"
-    exact_dist=""
-    exact_sec=""
-    a0_lines=""
-    total_lines=""
-    green_green_deletions=""
-
     play_args=( "$PLAY_BIN" "$DATA_DIR/$a_base" "$DATA_DIR/$b_base" )
     if [[ "$USE_AIDA" -eq 0 ]]; then
         play_args+=( --no-aida )
     fi
-    if [[ "$NO_REFINE" -eq 1 ]]; then
-        play_args+=( --no-refine )
-    fi
     skip_pair=0
     run_timed "${play_args[@]}"
-    exact_sec="$run_sec"
+    play_sec="$run_sec"
     if [[ "$skip_pair" -eq 1 ]]; then
-        if [[ -s "$WORKDIR/stderr" ]]; then
-            grep -E '^(A0 lines|Total lines|Green-green deletions):' "$WORKDIR/stderr" | tail -n 3 >&2 || true
-        fi
         echo "    skipped  ???" >&2
-        write_row "$current_a" "$current_b" '???' '???' '???' '???' '???'
-        current_a=""
-        current_b=""
+        write_row "$a_base" "$b_base" '???' '???' '???' '???' '???'
         skip_pair=0
         user_skipped=$((user_skipped + 1))
         continue
     fi
     parse_play_stdout
-    if [[ "$run_status" -ne 0 || -z "$exact_dist" ]]; then
-        if [[ -z "$exact_dist" ]]; then
-            exact_dist="error"
-        fi
-        echo "    $exact_dist  a0=${a0_lines:-?}  total=${total_lines:-?}  green-green=${green_green_deletions:-?}  (${exact_sec}s, exit $run_status)" >&2
+    if [[ "$run_status" -ne 0 || -z "$a0_lines" || -z "$a0_vertices" ]]; then
+        echo "    error  (${play_sec}s, exit $run_status)" >&2
         if [[ -s "$WORKDIR/stderr" ]]; then
             tail -n 8 "$WORKDIR/stderr" >&2 || true
         fi
+        write_row "$a_base" "$b_base" error "" "" "" "$play_sec"
     else
-        echo "    $exact_dist  a0=$a0_lines  total=$total_lines  green-green=$green_green_deletions  (${exact_sec}s)" >&2
+        echo "    $a0_lines lines, $a0_vertices vertices, $a0_edges edges, $a0_faces faces  (${play_sec}s)" >&2
+        write_row "$a_base" "$b_base" \
+            "$a0_lines" "$a0_vertices" "$a0_edges" "$a0_faces" "$play_sec"
     fi
-
-    write_row "$current_a" "$current_b" \
-        "$exact_dist" "$exact_sec" \
-        "${a0_lines:-}" "${total_lines:-}" "${green_green_deletions:-}"
-    current_a=""
-    current_b=""
-    exact_dist=""
-    exact_sec=""
-    a0_lines=""
-    total_lines=""
-    green_green_deletions=""
 done
 
 echo "Done. $pair_index pairs considered, $skipped skipped (already complete), $user_skipped skipped with Ctrl+N." >&2

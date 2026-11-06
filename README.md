@@ -1,18 +1,20 @@
 # Exact matching distance
 
-Computes the matching distance between two 2-parameter persistence modules from
-finite presentations, following Kerber, Lesnick, and Oudot,
+Goal: compute the matching distance between two 2-parameter persistence
+modules from finite presentations, following Kerber, Lesnick, and Oudot,
 [*Exact Computation of the Matching Distance on 2-Parameter Persistence Modules*](https://arxiv.org/abs/1812.09085).
 
-The program builds the coarse slice-space arrangement $A_0$ (one line per
-input grade, plus $s=0$ and $s=1$), evaluates the weighted bottleneck
-distance $F$ at every vertex (Section 5), and takes the true $s\to+\infty$
-limits of $F$ along unbounded outer rays (the bottleneck of the limiting
-diagrams, not the closed-form type-III formula of an interior witness).
-Comparison lines that refine $A_0$ to $A$ are handled per face: only the
-$O(n^2)$ lines of the current realizing pair are intersected, so the huge
-global arrangement of $O(n^4)$ lines is never stored. The largest of those
-values is the matching distance.
+**Current state:** the program only builds the coarse arrangement $A_0$ in
+the $(s,t)$ parameter plane of slices $y = sx + t$. $A_0$ has one dual line
+$t = v_y - s\,v_x$ per distinct input grade $v$ of either module, plus the
+lines $s=0$ and $s=1$. It does **not** evaluate $F$, refine $A_0$ to $A$,
+or print a matching distance yet.
+
+An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
+per face, using only the comparison lines of the current realizing pair.
+That refinement was not correct, and the code was removed (see the git
+history up to commit `322a0c8`). There is no `--no-refine` flag any more:
+building $A_0$ without refinement is the only mode.
 
 ## Dependencies
 
@@ -34,6 +36,11 @@ Default include paths in `CMakeLists.txt` are:
 Override them on the CMake command line if the libraries live elsewhere, for
 example `-DPHAT_INCLUDE_DIR=/path/to/phat/include`. System CGAL is used when
 CMake finds it.
+
+The stripped-down code only includes CGAL headers. PHAT, mpp_utils, and the
+scc2020 parser are still on the include path in `CMakeLists.txt` but are
+not used until slice barcodes come back. The `mpfree` and `aida` binaries
+are needed at run time unless `--no-aida` is given.
 
 ## Build
 
@@ -90,17 +97,17 @@ pass that `k` as `--dim` (`--dim` only selects homology when reading a `.bif`).
 By default each file is one module and is preprocessed with **mpfree** (for
 `.bif`) and **AIDA** (for `.bif` and `.scc`). AIDA's indecomposable summands
 become the presentations of that module. $A_0$ is built from the union of
-their distinct grades. Each evaluation of $F$ slices the summands separately
-(rank-1 intervals in constant time) and concatenates the barcodes, then runs
-one bottleneck. Matching distance does not factor over the summands.
+the distinct grades of all summands of both modules. The summands are kept
+separately for when slice barcodes come back (the matching distance does not
+factor over summands, but each slice barcode does).
 
 A `.sccsum` file is already decomposed and is read as-is. `--no-aida` skips
 mpfree and AIDA: a `.bif` is converted in-process to a (generally non-minimal)
 presentation of $H_d$ by taking $d$-simplices as generators and
 $(d+1)$-simplices as relations.
 
-The matching distance is taken between **two modules** (two files, or one
-file with exactly two `scc2020` blocks). The two files may mix `.scc`, `.scc_k`, `.minpres_k`,
+$A_0$ is built for **two modules** (two files, or one file with exactly two
+`scc2020` blocks). The two files may mix `.scc`, `.scc_k`, `.minpres_k`,
 `.sccsum`, and `.bif`.
 
 Set `$MPFREE` and `$AIDA` (or `$AIDA_WITHOUT_STATS`) if the binaries are not
@@ -128,65 +135,62 @@ Two files, one presentation or bifiltration each:
 | --- | --- |
 | `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for presentations (`.scc`, `.scc_k`, `.minpres_k`). |
 | `--no-aida` | Do not run mpfree or AIDA. Use the file as a raw presentation (or the in-process $H_d$ presentation of a `.bif`). |
-| `--no-cgal` | Only count generator/relation joins. Do not build the arrangement or compute the distance. |
-| `--no-refine` | Maximize $F$ only on vertices and outer cells of $A_0$. Skip per-face comparison-line intersections. Faster, and can miss the exact maximum. |
 
-Flags may appear before or after the file names.
+Flags may appear before or after the file names. Any other `--flag`
+(including the removed `--no-refine` and `--no-cgal`) is an error.
 
 ```bash
-./play a.scc b.scc --no-refine
-./play a.bif b.bif --dim 0 --no-refine
+./play a.scc b.scc
+./play a.bif b.bif --dim 0
 ./play --no-aida tests/interval_long.scc tests/interval_short.scc
-./play --no-cgal modules.scc
 ```
 
-Small maximizer regressions are in `tests/run_small.sh` (`--fast` skips the
-medium cases; `--no-refine` uses the $A_0$ sample only). A larger timing
-set is `tests/run_medium.sh` (`--aida` runs mpfree+AIDA; `--no-refine`
-skips comparison-line insertion); see `tests/README.md`. Both default to
-incremental refine. `--aida` without `--no-refine` uses 25 constructed
-`.bif` pairs sized for about 30–60s each. The 18 finite pairs from
-`tests/results.txt` are `./finite_benchmarks.sh` (`--old` is
-`--no-aida --no-refine`; `--new` is AIDA + refine). Feasible Kerber
-`data_benchmarks/small_instances` pairs are `./small_instance_benchmarks.sh`.
+### Test scripts
+
+All scripts check or record what play prints now: the number of $A_0$
+lines and the vertex, edge, and face counts. See `tests/README.md`.
+
+| Script | What it does |
+| --- | --- |
+| `tests/run_small.sh` | Regression: exact $A_0$ counts for small pairs (`--fast` skips the ~140-line cases) |
+| `tests/run_medium.sh` | Timing set, `--no-aida` by default, `--aida` for mpfree+AIDA. Prints the known distance and Hera's value as a reference (`--no-hera` skips Hera) |
+| `./finite_benchmarks.sh` | $A_0$ for the 18 finite pairs of the old `tests/results.txt`, AIDA by default |
+| `./small_instance_benchmarks.sh` | $A_0$ for feasible pairs of Kerber's `data_benchmarks/small_instances` |
+| `./benchmarks.sh` | $A_0$ for every pair of `tests/random_bifiltrations` |
+
+The three benchmark scripts write new `*_a0.txt` files under `tests/`. They
+leave the old distance logs (`results.txt`, `finite_results_new.txt`,
+`small_instance_results*.txt`, `refined_results.txt`) alone.
 
 ## Output
 
 Typical run:
 
 ```plain
-In total, found 2 generator joins and 3 relation joins
-Sum: 5
-Loaded 2 presentation(s)
-Arrangement has 18 vertices, 27 edges, and 11 faces
-Matching distance: 1.5
+$ ./play --no-aida tests/interval_long.scc tests/interval_short.scc
+Loaded 2 module(s) with 1 summand(s) and 1 summand(s)
 A0 lines: 5
-Total lines: 5
-Green-green deletions: 0
+Arrangement has 4 vertices, 15 edges, and 12 faces
 ```
 
-- Join counts come from incomparable generator grades and incomparable
-  relation grades of every loaded presentation.
-- The arrangement statistics are for the slice-space subdivision used in the
-  maximization.
-- `Matching distance` is the computed value of $d_{\mathrm{match}}$, printed
-  as a double, or `infinity` when some slice with positive slope has
-  unmatched infinite bars.
-- `A0 lines` is the number of supporting lines of the coarse arrangement
-  (dual of each distinct grade, plus $s=0$ and $s=1$).
-- `Total lines` is that $A_0$ count plus each comparison line that actually
-  entered a local overlay (one count per geometric line).
-- `Green-green deletions` is the number of edges removed because both
-  incident faces were green.
+- `Loaded` reports the number of summands per module (AIDA's indecomposables,
+  or 1 with `--no-aida`).
+- `A0 lines` is the number of lines of $A_0$: one dual line per distinct grade
+  of both modules, plus $s=0$ and $s=1$.
+- The arrangement counts are CGAL's for the whole $(s,t)$ plane. Vertices
+  are finite intersection points. The half-plane $s<0$ is not part of the
+  slice parameter space, but it is not clipped.
 
-If fewer than two presentations are loaded, the program exits after the join
-report (or with an error if an arrangement was requested).
+In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
+dual lines and $s=1$ all meet at $(s,t)=(1,0)$, which leaves 4 vertices.
+
+If the input does not give exactly two modules, the program exits with an
+error.
 
 ## Complexity
 
 The coarse arrangement $A_0$ has $O(n)$ lines and $O(n^2)$ vertices, where
-$n$ is the number of distinct grades. Per-face refinement intersects
-$O(n^2)$ lines of one realizing pair at a time (never the global $O(n^4)$
-arrangement $A$). Each candidate point still requires two slice persistence
-computations, so large presentations remain slow. Use `--no-refine` to skip
-those extra intersection points.
+$n$ is the number of distinct grades. It is built with exact arithmetic in
+one `CGAL::insert`. With about 300–400 lines (the 100-vertex random
+bifiltrations) that takes a few seconds, most of it AIDA when preprocessing
+is on.
