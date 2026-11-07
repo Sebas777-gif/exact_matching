@@ -82,9 +82,10 @@ PLAY_BIN=./build/play ./tests/run_small.sh
 | `r_bif_v_10_…_sample_1` vs `sample_5` (`--dim 0`) | 71 1806 3883 2078 | 2.5 | Same, different sample |
 
 The last four rows are skipped with `--fast`. The expected counts were
-recorded from the current CGAL build. The line counts follow from the
-grades (distinct grades + 2). The small vertex counts can be checked by
-hand, as in the interval case.
+recorded from the current CGAL build, with full dual lines (not clipped to
+$s \ge 0$). The line counts follow from the grades (distinct grades + 2).
+The small vertex counts can be checked by hand, as in the interval case,
+and every row satisfies Euler's formula $V - E + F = 1$.
 
 `ell.scc` is two intervals forming an L: $(1,0)\to(1,2)$ and $(0,2)\to(3,2)$.
 `span.scc` is one interval $(0,0)\to(3,2)$. $A_0$ has nine vertices; on
