@@ -2,8 +2,7 @@
 # Regression tests for the A0 arrangement.
 #
 # play currently builds A0 and nothing more: no evaluation of F and no
-# matching distance. A0 is clipped to s >= 0 (dual rays, plus the lines
-# s = 0 and s = 1). Each case checks the number of A0 lines and the
+# matching distance. Each case checks the number of A0 lines and the
 # vertex/edge/face counts of the CGAL arrangement. The matching distance
 # each pair was built for is kept in the comments, for when F comes back.
 #
@@ -130,35 +129,35 @@ echo "columns: A0 lines, vertices, edges, faces" >&2
 echo
 
 # Rank-1 intervals (d_match = 1). Grades (0,0), (1,1), (2,2): all three
-# dual rays meet s = 1 at (s, t) = (1, 0).
-run_case "interval scc" "5 4 12 9" \
+# duals and s = 1 meet at (s, t) = (1, 0).
+run_case "interval scc" "5 4 15 12" \
     tests/interval_long.scc tests/interval_short.scc --no-aida
-run_case "interval bif" "5 4 12 9" \
+run_case "interval bif" "5 4 15 12" \
     tests/interval_long.bif tests/interval_short.bif --no-aida
 
 # Two origin vertices merging at (51,0) vs a single infinite bar
 # (d_match = 25.5). The .scc version adds unused grades at x, y in
 # {10, 20, 30} that only cut A0; the .bif version does not.
-run_case "far_merge vs A0 anchors" "10 12 30 19" \
+run_case "far_merge vs A0 anchors" "10 24 62 39" \
     tests/far_merge.scc tests/a0_anchors.scc --no-aida
-run_case "far_merge bif" "5 4 12 9" \
+run_case "far_merge bif" "5 4 15 12" \
     tests/far_merge.bif tests/a0_anchors.bif --no-aida
 
 # Horizontal merge at (50,0) vs vertical merge at (0,50) (d_match = 25).
-run_case "horizontal vs vertical merge" "5 5 13 9" \
+run_case "horizontal vs vertical merge" "5 6 18 13" \
     tests/merge_horizontal.scc tests/merge_vertical.scc --no-aida
 
 # Different numbers of infinite bars (d_match = infinity).
-run_case "unmatched infinite bars" "4 3 9 7" \
+run_case "unmatched infinite bars" "4 3 11 9" \
     tests/free_one.scc tests/free_two.scc --no-aida
 
 # Raw H_2 presentations of two prism 2-skeleta (d_match = infinity).
-run_case "prism H_2" "7 7 19 13" \
+run_case "prism H_2" "7 12 34 23" \
     tests/prism_1.bif tests/prism_2.bif --dim 2 --no-aida
 
 # L of two intervals vs one spanning interval (d_match = 1.5). The
 # maximum of F sits at (s, t) = (1, 1/2), on an A0 edge, not an A0 vertex.
-run_case "ell vs span" "7 8 22 15" \
+run_case "ell vs span" "7 9 29 21" \
     tests/ell.scc tests/span.scc --no-aida
 
 if [[ "$FAST" -eq 0 ]]; then
@@ -166,21 +165,21 @@ if [[ "$FAST" -eq 0 ]]; then
     echo "Medium cases:"
 
     # far_merge with 140 unused relation grades (d_match = 25.5).
-    run_case "far_merge vs 140 A0 anchors" "144 213 499 287" \
+    run_case "far_merge vs 140 A0 anchors" "144 5183 10581 5399" \
         tests/far_merge.scc tests/a0_anchors_medium.scc --no-aida
 
     # Merge pair with ~140 distinct grades (d_match = 25).
-    run_case "horizontal vs vertical merge medium" "145 395 865 471" \
+    run_case "horizontal vs vertical merge medium" "145 5493 11222 5730" \
         tests/merge_horizontal_medium.scc tests/merge_vertical_medium.scc \
         --no-aida
 
     # Real 10-vertex 1-skeleta, H_0 (d_match = 3 and 2.5).
     BIF=tests/random_bifiltrations
-    run_case "v10 bif sample 1 vs 2" "74 1071 2284 1214" \
+    run_case "v10 bif sample 1 vs 2" "74 1966 4221 2256" \
         "$BIF/r_bif_v_10_dim_2_n_top_simplices_50_sample_1.bif" \
         "$BIF/r_bif_v_10_dim_2_n_top_simplices_50_sample_2.bif" \
         --dim 0 --no-aida
-    run_case "v10 bif sample 1 vs 5" "71 922 1977 1056" \
+    run_case "v10 bif sample 1 vs 5" "71 1806 3883 2078" \
         "$BIF/r_bif_v_10_dim_2_n_top_simplices_50_sample_1.bif" \
         "$BIF/r_bif_v_10_dim_2_n_top_simplices_50_sample_5.bif" \
         --dim 0 --no-aida

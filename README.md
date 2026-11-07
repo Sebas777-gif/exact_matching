@@ -5,11 +5,10 @@ modules from finite presentations, following Kerber, Lesnick, and Oudot,
 [*Exact Computation of the Matching Distance on 2-Parameter Persistence Modules*](https://arxiv.org/abs/1812.09085).
 
 **Current state:** the program only builds the coarse arrangement $A_0$ in
-the $(s,t)$ parameter plane of slices $y = sx + t$. For each distinct input
-grade $v$ of either module, $A_0$ has the dual line $t = v_y - s\,v_x$
-restricted to $s \ge 0$ (a ray starting on $s=0$), plus the full lines
-$s=0$ and $s=1$. It does **not** evaluate $F$, refine $A_0$ to $A$, or print
-a matching distance yet.
+the $(s,t)$ parameter plane of slices $y = sx + t$. $A_0$ has one dual line
+$t = v_y - s\,v_x$ per distinct input grade $v$ of either module, plus the
+lines $s=0$ and $s=1$. It does **not** evaluate $F$, refine $A_0$ to $A$,
+or print a matching distance yet.
 
 An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
 per face, using only the comparison lines of the current realizing pair.
@@ -169,37 +168,26 @@ Typical run:
 $ ./play --no-aida tests/interval_long.scc tests/interval_short.scc
 Loaded 2 module(s) with 1 summand(s) and 1 summand(s)
 A0 lines: 5
-Arrangement has 4 vertices, 12 edges, and 9 faces
+Arrangement has 4 vertices, 15 edges, and 12 faces
 ```
 
 - `Loaded` reports the number of summands per module (AIDA's indecomposables,
   or 1 with `--no-aida`).
-- `A0 lines` is the number of curves inserted: one dual ray per distinct
-  grade of both modules, plus the lines $s=0$ and $s=1$.
+- `A0 lines` is the number of lines of $A_0$: one dual line per distinct grade
+  of both modules, plus $s=0$ and $s=1$.
 - The arrangement counts are CGAL's for the whole $(s,t)$ plane. Vertices
-  are finite intersection points and ray start points. Edges include the
-  infinite pieces. The half-plane $s<0$, which is not part of the slice
-  parameter space, is a single empty face, because the dual rays stop at
-  $s=0$. Euler's formula $V - E + F = 1$ holds and is a quick sanity check.
+  are finite intersection points. The half-plane $s<0$ is not part of the
+  slice parameter space, but it is not clipped.
 
-In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their rays
-start at $t = 0, 1, 2$ on $s=0$ and all meet $s=1$ at $(s,t)=(1,0)$, which
-gives 4 vertices. The faces are the half-plane $s<0$, four faces in
-$0<s<1$, and four in $s>1$.
-
-Two dual lines meet at the slice through both grades. That slice has
-positive slope exactly when the grades are comparable, so clipping to
-$s \ge 0$ removes one vertex per pair of incomparable grades (fewer when
-several lines meet in one point).
+In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
+dual lines and $s=1$ all meet at $(s,t)=(1,0)$, which leaves 4 vertices.
 
 If not exactly two input files are given, the program exits with an error.
 
 ## Complexity
 
-The coarse arrangement $A_0$ has $O(n)$ curves and $O(n^2)$ vertices, where
+The coarse arrangement $A_0$ has $O(n)$ lines and $O(n^2)$ vertices, where
 $n$ is the number of distinct grades. It is built with exact arithmetic in
-one `CGAL::insert` (a sweep). For two 100-vertex random bifiltrations
-(`r_bif_v_100_…_sample_1` vs `sample_2`, `--dim 0`) that is 324 curves and
-about 23k vertices in 0.8s with AIDA (preprocessing included), or 419 curves
-and about 42k vertices in 2.4s with `--no-aida`. Before clipping to
-$s \ge 0$ the same pair had about 42k and 72k vertices.
+one `CGAL::insert`. With about 300–400 lines (the 100-vertex random
+bifiltrations) that takes a few seconds, most of it AIDA when preprocessing
+is on.
