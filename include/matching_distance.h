@@ -7,6 +7,7 @@
 #include <CGAL/Arr_linear_traits_2.h>
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 
+#include <cassert>
 #include <set>
 #include <utility>
 #include <vector>
@@ -18,7 +19,6 @@ typedef Kernel::FT FT;
 typedef CGAL::Arr_linear_traits_2<Kernel> Traits_2;
 typedef Traits_2::Point_2 Point_2;  // (s, t)
 typedef Traits_2::Line_2 Line_2;    // s = 0 and s = 1
-typedef Traits_2::Ray_2 Ray_2;      // dual of a grade, from s = 0 to the right
 typedef Traits_2::X_monotone_curve_2 X_monotone_curve_2;
 typedef CGAL::Arrangement_2<Traits_2> Arrangement_2;
 
@@ -52,9 +52,9 @@ inline Module as_module(Presentation P) {
   return M;
 }
 
-// Dual of a grade v = (v_x, v_y): the slices through v, namely t = v_y - s v_x for s >= 0
-inline Ray_2 dual_ray_of_grade(const Grade2& v) {
-  return Ray_2(Point_2(FT(0), v.y), Point_2(FT(1), v.y - v.x));
+// Dual of a grade v = (v_x, v_y): the slices through v, namely t = v_y - s v_x
+inline Line_2 dual_line_of_grade(const Grade2& v) {
+  return Line_2(v.x, FT(1), -v.y);
 }
 
 inline void collect_grades(const Module& M, const Module& N, std::set<Grade2>& grades) {
@@ -77,11 +77,24 @@ inline std::size_t build_arrangement_A(Arrangement_2& arr, const Module& M, cons
   std::vector<X_monotone_curve_2> curves;
   curves.reserve(grades.size() + 2);
   for (const Grade2& g : grades)
-    curves.push_back(X_monotone_curve_2(dual_ray_of_grade(g)));
+    curves.push_back(X_monotone_curve_2(dual_line_of_grade(g)));
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(1), FT(0)), Point_2(FT(1), FT(1)))));
   curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(0), FT(0)), Point_2(FT(0), FT(1)))));
   CGAL::insert(arr, curves.begin(), curves.end());
   return curves.size();
+}
+
+inline FT weighted_push(const Grade2& p, const FT& s, const FT& t) {
+  assert(s > 0);
+  if (p.y > s * p.x + t) // strictly above the slice
+  {
+    if (s >= 1)
+      return (p.y - t) / s;
+    return p.y;
+  }
+  if (s >= 1)
+    return p.x;
+  return s * p.x + t;
 }
 
 }  // namespace matching
