@@ -176,11 +176,19 @@ Arrangement has 4 vertices, 15 edges, and 12 faces
 - `A0 lines` is the number of lines of $A_0$: one dual line per distinct grade
   of both modules, plus $s=0$ and $s=1$.
 - The arrangement counts are CGAL's for the whole $(s,t)$ plane. Vertices
-  are finite intersection points. The half-plane $s<0$ is not part of the
-  slice parameter space, but it is not clipped.
+  are finite intersection points; edges include the infinite pieces. Euler's
+  formula $V - E + F = 1$ holds and is a quick sanity check. The half-plane
+  $s<0$ is not part of the slice parameter space, but it is not clipped.
 
 In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
 dual lines and $s=1$ all meet at $(s,t)=(1,0)$, which leaves 4 vertices.
+
+Two dual lines meet at the slice through both grades. That slice has
+positive slope exactly when the grades are comparable, so every vertex in
+$s<0$ comes from a pair of incomparable grades. Clipping the dual lines to
+rays starting at $s=0$ removes those vertices; this was tried (commit
+`8c99912`) and undone for simplicity. It roughly halves the vertex count on
+the random bifiltrations.
 
 If not exactly two input files are given, the program exits with an error.
 
@@ -188,6 +196,7 @@ If not exactly two input files are given, the program exits with an error.
 
 The coarse arrangement $A_0$ has $O(n)$ lines and $O(n^2)$ vertices, where
 $n$ is the number of distinct grades. It is built with exact arithmetic in
-one `CGAL::insert`. With about 300–400 lines (the 100-vertex random
-bifiltrations) that takes a few seconds, most of it AIDA when preprocessing
-is on.
+one `CGAL::insert` (a sweep). For two 100-vertex random bifiltrations
+(`r_bif_v_100_…_sample_1` vs `sample_2`, `--dim 0`) that is 324 lines and
+about 42k vertices in about 2s with AIDA (preprocessing included), or 419
+lines and about 72k vertices in about 4s with `--no-aida`.
