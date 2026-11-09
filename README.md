@@ -143,22 +143,26 @@ Flags may appear before or after the file names. Any other `--flag`
 ./play --no-aida tests/interval_long.scc tests/interval_short.scc
 ```
 
-### Test scripts
+### Tests and benchmarks
 
-All scripts check or record what play prints now: the number of $A_0$
-lines and the vertex, edge, and face counts. See `tests/README.md`.
+`bench.py` (Python 3, standard library only) runs play on fixed sets of
+pairs. Every set checks or records what play prints now: the number of
+$A_0$ lines and the vertex, edge, and face counts. See `tests/README.md`.
 
-| Script | What it does |
+| Command | What it does |
 | --- | --- |
-| `tests/run_small.sh` | Regression: exact $A_0$ counts for small pairs (`--fast` skips the ~140-line cases) |
-| `tests/run_medium.sh` | Timing set, `--no-aida` by default, `--aida` for mpfree+AIDA. Prints the known distance and Hera's value as a reference (`--no-hera` skips Hera) |
-| `./finite_benchmarks.sh` | $A_0$ for the 18 finite pairs of the old `tests/results.txt`, AIDA by default |
-| `./small_instance_benchmarks.sh` | $A_0$ for feasible pairs of Kerber's `data_benchmarks/small_instances` |
-| `./benchmarks.sh` | $A_0$ for every pair of `tests/random_bifiltrations` |
+| `./bench.py small` | Regression: exact $A_0$ counts for small pairs, exit 1 on a mismatch (`--fast` skips the ~140-line cases) |
+| `./bench.py medium` | Timing set, `--no-aida` by default, `--aida` for mpfree+AIDA. Prints the known distance and Hera's value as a reference (`--no-hera` skips Hera) |
+| `./bench.py finite` | $A_0$ for the 18 finite pairs of the old `tests/results.txt`, AIDA by default |
+| `./bench.py kerber` | $A_0$ for feasible pairs of Kerber's `data_benchmarks/small_instances` |
+| `./bench.py random` | $A_0$ for every pair of `tests/random_bifiltrations` |
 
-The three benchmark scripts write new `*_a0.txt` files under `tests/`. They
-leave the old distance logs (`results.txt`, `finite_results_new.txt`,
-`small_instance_results*.txt`, `refined_results.txt`) alone.
+`./bench.py SET --help` lists the options of a set. `finite`, `kerber`, and
+`random` append one row per pair to a `*_a0.txt` file under `tests/` and
+resume where they stopped. They leave the old distance logs (`results.txt`,
+`finite_results_new.txt`, `small_instance_results*.txt`,
+`refined_results.txt`) alone. In every set, Ctrl+N skips the running pair
+and Ctrl+C stops.
 
 ## Output
 

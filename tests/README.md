@@ -1,10 +1,14 @@
-# Sample presentations and test scripts
+# Sample presentations, tests, and benchmarks
 
 `play` currently builds the coarse arrangement $A_0$ and nothing more. The
-scripts below check or record its output: the number of $A_0$ lines and the
-vertex, edge, and face counts. The matching distances listed here are the
-values each pair was built for. They are kept as reference values for when
-$F$ is evaluated again. No script checks them right now.
+sets of `../bench.py` check or record its output: the number of $A_0$
+lines and the vertex, edge, and face counts. The matching distances listed
+here are the values each pair was built for. They are kept as reference
+values for when $F$ is evaluated again. Nothing checks them right now.
+
+The pair lists of all sets are tables at the top of `bench.py`.
+`./bench.py SET --help` lists the options of a set. In every set, Ctrl+N
+skips the running pair and Ctrl+C stops.
 
 `interval_long.scc` and `interval_short.scc` are two interval modules with
 matching distance **1**.
@@ -57,14 +61,15 @@ shift by 1 in both coordinates to push (1, 1) onto (2, 2).
 
 ## Small regression tests
 
-`run_small.sh` builds $A_0$ for each pair and compares the four numbers
+`./bench.py small` builds $A_0$ for each pair and compares the four numbers
 (lines, vertices, edges, faces) with the expected ones. Every case uses
-`--no-aida`.
+`--no-aida`. It exits with 1 if a case fails, times out (30s), or is
+skipped.
 
 ```bash
-./tests/run_small.sh                 # all cases
-./tests/run_small.sh --fast          # tiny cases only
-PLAY_BIN=./build/play ./tests/run_small.sh
+./bench.py small                     # all cases
+./bench.py small --fast              # tiny cases only
+./bench.py small --play other/play   # or PLAY_BIN=other/play
 ```
 
 | Pair | $A_0$ (L V E F) | $d_\mathrm{match}$ | Why the pair exists |
@@ -104,21 +109,21 @@ infinite bars match at cost 0; the finite bar goes to the diagonal at 25.5.
 Dummy relation columns in the `*_medium.scc` files are empty: they do not
 change the slice barcodes, only the arrangement.
 
-## Medium suite
+## Medium set
 
-`run_medium.sh` builds $A_0$ for a larger set of pairs and prints a TSV
+`./bench.py medium` builds $A_0$ for a larger set of pairs and prints a TSV
 summary (`name`, `known_dist`, `a0_lines`, `vertices`, `edges`, `faces`,
 `seconds`, `status`, `hera`, `hera_seconds`). A case passes when play exits
 cleanly and prints the $A_0$ counts. The known distance and Hera's
-`matching_dist` value (on the matching `.bif` files, `HERA_BIN` if set,
-otherwise auto-detected) are reference columns only. Building $A_0$ takes
-well under a second per case here; Hera is the slow part (30s timeout).
+`matching_dist` value (on the matching `.bif` files; `--hera PATH` or
+`HERA_BIN` if set, otherwise auto-detected) are reference columns only.
+Building $A_0$ takes well under a second per case here; Hera is the slow
+part (`--hera-timeout`, default 30s).
 
 ```bash
-./tests/run_medium.sh                 # --no-aida
-./tests/run_medium.sh --aida          # mpfree+AIDA
-./tests/run_medium.sh --no-hera       # skip the Hera reference
-PLAY_BIN=./build/play ./tests/run_medium.sh --aida
+./bench.py medium                     # --no-aida
+./bench.py medium --aida              # mpfree+AIDA
+./bench.py medium --no-hera           # skip the Hera reference
 ```
 
 | Pair | Known distance |
@@ -167,27 +172,46 @@ $d_\mathrm{match}=L/2$.
 
 `tests/results.txt` (dim 0, old `--no-refine`) has 18 finite-distance
 pairs among the first 1577 unordered `random_bifiltrations` comparisons;
-the rest returned infinity in 1–3s. `finite_benchmarks.sh` builds $A_0$
-for those 18 pairs and records Hera's distance next to it:
+the rest returned infinity in 1–3s. `./bench.py finite` builds $A_0$ for
+those 18 pairs and runs Hera on each as a reference. The pair list also
+stores Hera's distance for each pair, which is printed next to the pair.
 
 ```bash
-./finite_benchmarks.sh               # AIDA (play default)
-./finite_benchmarks.sh --no-aida
-./finite_benchmarks.sh --no-hera     # A0 only
+./bench.py finite                    # AIDA (play default)
+./bench.py finite --no-aida
+./bench.py finite --no-hera          # A0 only
 ```
 
-Results go to `tests/finite_results_a0_<aida|noaida>.txt`. The script also
-prints the old `--no-refine` distance from `results.txt` for each pair.
-Several of those are far above Hera's value (for example 85 vs 34.5). They
-came from an early, buggy version of $F$, so use Hera's column as the
-reference. Ctrl+C keeps completed rows.
+The old `--no-refine` distances in `results.txt` came from an early, buggy
+version of $F$; several are far above Hera's value (for example 85 vs
+34.5).
 
 ## All random pairs
 
-`./benchmarks.sh` builds $A_0$ for every unordered pair of
+`./bench.py random` builds $A_0$ for every unordered pair of
 `tests/random_bifiltrations/*.bif` (77,815 pairs) and runs Hera on each as
-a reference. Results go to `tests/results_a0.txt`. The old
-`tests/results.txt` is not touched. `--no-aida` and `--no-hera` work as above.
+a reference. The old `tests/results.txt` is not touched. `--no-aida` and
+`--no-hera` work as above.
+
+## Results files
+
+`finite`, `random`, and `kerber` write tab-separated files:
+
+| Set | Default file |
+| --- | --- |
+| `finite` | `tests/finite_results_a0_<aida\|noaida>.txt` |
+| `random` | `tests/results_a0.txt` |
+| `kerber` | `tests/small_instance_results_a0.txt` |
+
+`--results PATH` writes elsewhere. The `#` lines at the top record the
+settings. Each pair's row is appended as soon as the pair is done, so
+Ctrl+C keeps every completed row. If Ctrl+C hits while play runs after
+Hera finished, the row has Hera's value and empty $A_0$ columns.
+
+A second run with the same settings skips the pairs that are already done
+(`--fresh` starts over; different settings are an error). A pair skipped
+with Ctrl+N gets `???` in its $A_0$ columns and is not retried. `error` or
+`timeout` (with `--timeout S`) in `a0_lines` means play failed.
 
 ## Kerber `small_instances`
 
@@ -199,14 +223,11 @@ Pairs are only within the same suffix (`.scc_k`, `.minpres_k`, or plain
 `.scc`), because the trailing index is reflected homology.
 
 ```bash
-./small_instance_benchmarks.sh              # AIDA, max 200 grades
-./small_instance_benchmarks.sh --no-aida
-./small_instance_benchmarks.sh --max-grades 400
+./bench.py kerber                   # AIDA, max 200 grades
+./bench.py kerber --no-aida
+./bench.py kerber --max-grades 400
 ```
 
-Results go to `tests/small_instance_results_a0.txt` with columns `a0_lines`,
-`vertices`, `edges`, `faces`, and `seconds`. The old distance logs
-`tests/small_instance_results.txt` and
-`tests/small_instance_results_refine.txt` are not touched. Ctrl+N skips the
-pair that is running and writes `???` in its measurement columns (that pair
-is not retried). Ctrl+C keeps completed rows.
+The results file has no Hera columns: Hera reads only `.bif` files. The old
+distance logs `tests/small_instance_results.txt` and
+`tests/small_instance_results_refine.txt` are not touched.
