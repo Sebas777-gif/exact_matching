@@ -7,10 +7,16 @@
 #include <CGAL/Arr_linear_traits_2.h>
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 
+#include <algorithm>
 #include <cassert>
+#include <numeric>
 #include <set>
 #include <utility>
 #include <vector>
+
+#include <phat/boundary_matrix.h>
+#include <phat/persistence_pairs.h>
+#include <phat/compute_persistence_pairs.h>
 
 namespace matching {
 
@@ -21,6 +27,9 @@ typedef Traits_2::Point_2 Point_2;  // (s, t)
 typedef Traits_2::Line_2 Line_2;    // s = 0 and s = 1
 typedef Traits_2::X_monotone_curve_2 X_monotone_curve_2;
 typedef CGAL::Arrangement_2<Traits_2> Arrangement_2;
+
+using Index = phat::index;
+using IndexVec = std::vector<Index>;
 
 struct Grade2 {
   FT x, y;
@@ -102,8 +111,7 @@ inline std::size_t build_arrangement_A(Arrangement_2& arr, const Module& M, cons
 
 inline FT weighted_push(const Grade2& p, const FT& s, const FT& t) {
   assert(s > 0);
-  if (p.y > s * p.x + t) // strictly above the slice
-  {
+  if (p.y > s * p.x + t) { // strictly above the slice
     if (s >= 1)
       return (p.y - t) / s;
     return p.y;
@@ -111,6 +119,53 @@ inline FT weighted_push(const Grade2& p, const FT& s, const FT& t) {
   if (s >= 1)
     return p.x;
   return s * p.x + t;
+}
+
+// adapted from Hera (persistence_module.hpp)
+
+template<class T>
+IndexVec get_sorted_indices(const std::vector<T>& values) { 
+  IndexVec result(values.size());
+  std::iota(result.begin(), result.end(), 0);
+  std::sort(result.begin(), result.end(),
+          [&values](Index a, Index b) { return values[a] < values[b]; });
+  return result;
+}
+
+inline std::vector<FT> project_generators(const FT& s, const FT& t, const Presentation& P) {
+  std::vector<FT> gen_values;
+  gen_values.reserve(P.generators.size());
+  for (const Grade2& g : P.generators) gen_values.push_back(weighted_push(g, s, t));
+  return gen_values;
+}
+
+inline std::vector<FT> project_relations(const FT& s, const FT& t, const Presentation& P) {
+  std::vector<FT> rel_values;
+  rel_values.reserve(P.relations.size());
+  for (const Grade2& r : P.relations) rel_values.push_back(weighted_push(r, s, t));
+  return rel_values;
+}
+
+inline phat::boundary_matrix<> build_slice_matrix(const Presentation& P,
+    const IndexVec& gen_order, const IndexVec& rel_order) {
+  const Index n_gens = P.generators.size();
+  const Index n_rels = P.relations.size();
+  phat::boundary_matrix<> phat_matrix;
+
+  IndexVec gen_rank(n_gens);
+  for (Index k = 0; k < n_gens; k++) gen_rank[gen_order[k]] = k;
+
+  phat_matrix.set_num_cols(n_gens + n_rels);
+  for (Index k = 0; k < n_gens; k++) phat_matrix.set_dim(k, 0);
+  for (Index i = 0; i < n_rels; i++) {
+    const auto& col = P.columns[rel_order[i]];
+    IndexVec current_rel(col.begin(), col.end());
+    for (Index& j : current_rel) j = gen_rank[j];
+    std::sort(current_rel.begin(), current_rel.end());
+    phat_matrix.set_dim(n_gens + i, 1);
+    phat_matrix.set_col(n_gens + i, current_rel);
+  }
+  return phat_matrix;
 }
 
 }  // namespace matching
