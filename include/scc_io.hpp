@@ -118,8 +118,7 @@ inline matching::Presentation read_scc_block_body(std::istream& in, int& line_no
                     + ": generator index " + std::to_string(idx) + " out of range");
             col.push_back(idx);
         }
-        std::sort(col.begin(), col.end());
-        col.erase(std::unique(col.begin(), col.end()), col.end());
+        matching::reduce_mod2(col);
         P.columns.push_back(std::move(col));
     }
 

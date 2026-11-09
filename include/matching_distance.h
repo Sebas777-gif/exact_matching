@@ -42,6 +42,22 @@ struct Presentation {
   std::vector<std::vector<int> > columns;
 };
 
+// Reduce a list of generator indices mod 2: a generator listed twice
+// cancels (g + g = 0), so equal indices are removed in pairs.
+// The result is sorted.
+inline void reduce_mod2(std::vector<int>& col) {
+  std::sort(col.begin(), col.end());
+  std::vector<int> out;
+  out.reserve(col.size());
+  for (int idx : col) {
+    if (!out.empty() && out.back() == idx)
+      out.pop_back();
+    else
+      out.push_back(idx);
+  }
+  col = std::move(out);
+}
+
 struct Module {
   std::vector<Presentation> summands;
 };

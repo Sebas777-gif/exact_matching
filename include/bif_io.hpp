@@ -173,8 +173,7 @@ inline matching::Presentation presentation_from_bif(const std::vector<BifSimplex
                 continue;
             col.push_back(rank[b]);
         }
-        std::sort(col.begin(), col.end());
-        col.erase(std::unique(col.begin(), col.end()), col.end());
+        matching::reduce_mod2(col);
         P.columns.push_back(std::move(col));
     }
     return P;
