@@ -94,7 +94,8 @@ void check_quadrilateral(const char* name, const Module& M, const Module& N,
                          std::size_t vertices, std::size_t edges, std::size_t faces,
                          std::size_t red) {
   Colored_arrangement arr;
-  std::size_t got_red = build_initial_quadrilateral(arr, M, N);
+  FT delta(0);
+  std::size_t got_red = build_initial_quadrilateral(arr, M, N, delta);
   bool colors_ok = true;
   std::size_t red_faces = 0;
   for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f) {
@@ -116,7 +117,8 @@ void check_quadrilateral(const char* name, const Module& M, const Module& N,
   build_arrangement_A(a0, M, N);
 
   Colored_arrangement fresh;
-  build_initial_quadrilateral(fresh, M, N);
+  FT fresh_delta(0);
+  build_initial_quadrilateral(fresh, M, N, fresh_delta);
   bool ok = fresh.number_of_vertices() == vertices && fresh.number_of_edges() == edges
       && fresh.number_of_faces() == faces && got_red == red && red_faces == red && colors_ok
       && arr.number_of_vertices() == a0.number_of_vertices();
