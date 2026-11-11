@@ -12,6 +12,8 @@
 #include <CGAL/Arr_extended_dcel.h>
 #include <CGAL/Arr_observer.h>
 
+#include <random>
+
 #include <matching_distance.h>
 
 namespace matching {
@@ -123,6 +125,8 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   // New edges that split a green face. Both sides are green, so they can be
   // removed once the insertion is finished.
   std::vector<Halfedge_handle> green_edges;
+  // Number of F evaluations done by the callbacks.
+  std::size_t evaluations = 0;
 
   Coloring_observer(Colored_arrangement& arr, const Module& M, const Module& N, FT& delta)
       : CGAL::Arr_observer<Colored_arrangement>(arr), M_(M), N_(N), delta_(delta),
@@ -139,8 +143,14 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
     if (f->data() == Color::red) {
       Point_2 p = e->source()->point();
       Point_2 q = e->target()->point();
-      if (!e->source()->data()) e->source()->set_data(F(M_, N_, p.x(), p.y())); // F(p)
-      if (!e->target()->data()) e->target()->set_data(F(M_, N_, q.x(), q.y())); // F(q)
+      if (!e->source()->data()) {
+        e->source()->set_data(F(M_, N_, p.x(), p.y()));  // F(p)
+        ++evaluations;
+      }
+      if (!e->target()->data()) {
+        e->target()->set_data(F(M_, N_, q.x(), q.y()));  // F(q)
+        ++evaluations;
+      }
       std::optional<FT> Fp = e->source()->data();
       std::optional<FT> Fq = e->target()->data();
       assert(Fp && Fq); // F is finite everywhere or nowhere; checked before inserting
@@ -254,6 +264,106 @@ inline void insert_segment(Colored_arrangement& arr, Coloring_observer& obs,
   obs.yellow.clear();
   obs.green_edges.clear();
   for (Colored_arrangement::Halfedge_handle he : to_remove) arr.remove_edge(he);
+}
+
+// --- Randomized insertion --------------------------------------------------
+
+// Counts of the incremental algorithm for one strip.
+struct StripStats {
+  std::size_t segments = 0;     // dual segments inserted
+  std::size_t samples = 0;      // F evaluations of the sampling pass
+  std::size_t evaluations = 0;  // F evaluations during the insertion, quadrilateral corners included
+  // The final arrangement, outer face included.
+  std::size_t vertices = 0, edges = 0, faces = 0, red_faces = 0;
+};
+
+// A random vertex of A0 in the strip 0 <= s <= 1: where the dual segments of
+// two random grades a and b cross, if they do (a_y - s a_x = b_y - s b_x),
+// and otherwise an endpoint of a's segment on a random wall.
+//
+// Sampling only A0 vertices keeps the result comparable: Delta never
+// exceeds the maximum of F over the A0 vertices, so the incremental result
+// must equal max_F_on_vertices exactly. (Any slice gives a valid lower
+// bound on the matching distance; for the A0 experiment that would break
+// the comparison.)
+inline Point_2 random_a0_vertex(const std::vector<Grade2>& grades, std::mt19937& rng) {
+  std::uniform_int_distribution<std::size_t> pick(0, grades.size() - 1);
+  const Grade2& a = grades[pick(rng)];
+  const Grade2& b = grades[pick(rng)];
+  if (a.x != b.x) {
+    const FT s = (b.y - a.y) / (b.x - a.x);
+    if (s >= 0 && s <= 1) return Point_2(s, a.y - s * a.x);
+  }
+  if (rng() % 2) return Point_2(FT(0), a.y);
+  return Point_2(FT(1), a.y - a.x);
+}
+
+// Evaluates F at k random A0 vertices of the strip of (M, N) and raises
+// delta. Returns false, after the first sample, if F is infinite there:
+// F is infinite on every slice or on none. A sampled vertex is evaluated
+// again if the insertion reaches it later.
+inline bool sample_delta(const Module& M, const Module& N, std::size_t k, std::mt19937& rng,
+                         FT& delta, StripStats& stats) {
+  std::set<Grade2> grade_set;
+  collect_grades(M, N, grade_set);
+  if (grade_set.empty()) return true;
+  const std::vector<Grade2> grades(grade_set.begin(), grade_set.end());
+  for (std::size_t i = 0; i < k; i++) {
+    const Point_2 p = random_a0_vertex(grades, rng);
+    const std::optional<FT> f = F(M, N, p.x(), p.y());
+    ++stats.samples;
+    if (!f) return false;
+    delta = std::max(delta, *f);
+  }
+  return true;
+}
+
+// Inserts the dual segments of the strip of (M, N) in random order into the
+// initial quadrilateral, with red/green coloring, and raises delta.
+inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT& delta,
+                         StripStats& stats) {
+  Colored_arrangement arr;
+  build_initial_quadrilateral(arr, M, N, delta);
+  stats.evaluations = arr.number_of_vertices();  // the corners
+
+  // Declared after arr, so it is destroyed (and detached) before arr.
+  Coloring_observer obs(arr, M, N, delta);
+
+  std::set<Grade2> grades;
+  collect_grades(M, N, grades);
+  std::vector<Segment_2> segments;
+  for (const Grade2& g : grades) segments.push_back(dual_segment_of_grade(g));
+  std::shuffle(segments.begin(), segments.end(), rng);
+  for (const Segment_2& seg : segments) insert_segment(arr, obs, seg, delta);
+
+  stats.segments = segments.size();
+  stats.evaluations += obs.evaluations;
+  stats.vertices = arr.number_of_vertices();
+  stats.edges = arr.number_of_edges();
+  stats.faces = arr.number_of_faces();
+  for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f)
+    if (f->data() == Color::red) ++stats.red_faces;
+}
+
+// The maximum of F over the A0 vertices of both strips, computed with the
+// red/green insertion. Returns std::nullopt (infinity) if the modules have
+// different numbers of infinite bars. First evaluates F at `samples` random
+// A0 vertices (half per strip, at least one) for a good starting Delta,
+// then inserts the segments of the flat and then the steep strip. Delta is
+// shared by both. The result equals max_F_on_vertices over both strips.
+inline std::optional<FT> incremental_max_F(const Module& M, const Module& N,
+                                           std::size_t samples, unsigned seed,
+                                           StripStats& flat, StripStats& steep) {
+  const Module M_swap = swapped_module(M), N_swap = swapped_module(N);
+  std::mt19937 rng(seed);
+  FT delta(0);
+  // The first sample also decides whether F is infinite (everywhere).
+  if (!sample_delta(M, N, std::max<std::size_t>(1, (samples + 1) / 2), rng, delta, flat))
+    return std::nullopt;
+  sample_delta(M_swap, N_swap, samples / 2, rng, delta, steep);
+  insert_strip(M, N, rng, delta, flat);
+  insert_strip(M_swap, N_swap, rng, delta, steep);
+  return delta;
 }
 
 }  // namespace matching

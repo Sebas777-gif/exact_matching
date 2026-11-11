@@ -11,6 +11,8 @@ matching distance).
 
 finite, random, and kerber append one row per pair to a results file and
 resume where they stopped. --a0-only skips F (play --a0-only) in every set.
+--incremental (with --samples K, --seed N) uses the red/green insertion
+instead of evaluating F at every A0 vertex; the result must be the same.
 ./bench.py SET --help lists the options of a set.
 Ctrl+N skips the running pair. Ctrl+C stops and keeps all completed rows.
 """
@@ -241,23 +243,26 @@ def run_play(args, files, dim=None):
         cmd.append("--no-aida")
     if args.a0_only:
         cmd.append("--a0-only")
+    elif args.incremental:
+        cmd += ["--incremental", "--samples", str(args.samples), "--seed", str(args.seed)]
     return run(cmd, args.timeout)
 
 
 def a0_stats(r, a0_only):
-    """(lines, vertices, edges, faces, max_F, max_F_decimal) from play's
-    output, or None. max_F is exact, as play prints it ("3/2", "inf");
-    max_F_decimal is play's decimal ("1.5", "inf"). Both are "" with
-    --a0-only."""
+    """(lines, vertices, edges, faces, max_F, max_F_decimal, evaluations)
+    from play's output, or None. max_F is exact, as play prints it ("3/2",
+    "inf"); max_F_decimal is play's decimal ("1.5", "inf"); evaluations is
+    the number of F evaluations. The last three are "" with --a0-only."""
     lines = re.search(r"^A0 lines: (\d+)", r.stdout, re.M)
     arr = re.search(r"^Arrangement has (\d+) vertices, (\d+) edges, and (\d+) faces",
                     r.stdout, re.M)
     max_f = re.search(r"^Max F on A0 vertices: (\S+)(?: \((\S+)\))?", r.stdout, re.M)
     if r.status != "ok" or not (lines and arr and (max_f or a0_only)):
         return None
+    evals = re.search(r"^F evaluations: (\d+)", r.stdout, re.M)
     if not max_f:
-        return (lines[1], *arr.groups(), "", "")
-    return (lines[1], *arr.groups(), max_f[1], max_f[2] or max_f[1])
+        return (lines[1], *arr.groups(), "", "", "")
+    return (lines[1], *arr.groups(), max_f[1], max_f[2] or max_f[1], evals[1] if evals else "")
 
 
 def as_number(value):
@@ -272,13 +277,13 @@ def as_number(value):
 
 
 def a0_fields(r, stats):
-    """The a0_lines, vertices, edges, faces, max_F, max_F_decimal columns of a
-    results row."""
+    """The a0_lines, vertices, edges, faces, max_F, max_F_decimal, evaluations
+    columns of a results row."""
     if stats:
         return list(stats)
     if r.status == "skip":
-        return ["???"] * 6
-    return ["timeout" if r.status == "timeout" else "error", "", "", "", "", ""]
+        return ["???"] * 7
+    return ["timeout" if r.status == "timeout" else "error", "", "", "", "", "", ""]
 
 
 def outcome(r, stats=None, lines=8):
@@ -289,6 +294,8 @@ def outcome(r, stats=None, lines=8):
             text += f", max F {stats[4]}"
             if stats[5] != stats[4]:
                 text += f" ({stats[5]})"
+            if stats[6]:
+                text += f", {stats[6]} F evaluations"
         return text + f"  ({r.seconds}s)"
     if r.status == "ok":
         return f"FAIL no A0 counts or max F in the output  ({r.seconds}s)"
@@ -362,7 +369,7 @@ def benchmark(args, pairs, results, dim=None):
     pair skipped with Ctrl+N; it is not retried."""
     with_hera = dim is not None
     done = {(r[0], r[1]) for r in results.rows
-            if len(r) > 2 and r[2] and (not with_hera or (len(r) > 9 and r[9]))}
+            if len(r) > 2 and r[2] and (not with_hera or (len(r) > 10 and r[10]))}
     print(f"play: {args.play}  ({'AIDA' if args.aida else '--no-aida'})")
     if with_hera:
         print(f"hera: {args.hera or 'skipped'}")
@@ -382,7 +389,7 @@ def benchmark(args, pairs, results, dim=None):
             r = run_play(args, [a, b], dim)
         except KeyboardInterrupt:
             if args.hera and with_hera:   # keep Hera's result; play is redone on resume
-                results.append([a.name, b.name, "", "", "", "", "", "", "", *hera])
+                results.append([a.name, b.name, "", "", "", "", "", "", "", "", *hera])
             raise
         stats = a0_stats(r, args.a0_only)
         print("  A0: " + outcome(r, stats))
@@ -396,8 +403,9 @@ def benchmark(args, pairs, results, dim=None):
 def cmd_small(args):
     cases = SMALL + ([] if args.fast else SMALL_SLOW)
     print(f"play: {args.play}  (--no-aida, timeout {args.timeout:g}s)")
+    print(f"method: {method(args)}")
     print("columns: A0 lines, vertices, edges, faces" +
-          ("" if args.a0_only else ", max F on A0 vertices") + "\n")
+          ("" if args.a0_only else ", max F on A0 vertices; then the F evaluations") + "\n")
     failed = 0
     for name, expected_a0, expected_f, play_args in cases:
         expected = expected_a0 if args.a0_only else f"{expected_a0} {expected_f}"
@@ -406,7 +414,8 @@ def cmd_small(args):
         stats = a0_stats(r, args.a0_only)
         got = " ".join(x for x in stats[:5] if x) if stats else ""
         if got == expected:
-            print(f"ok  {got}  ({r.seconds}s)")
+            evals = f"  [{stats[6]} evaluations]" if stats[6] else ""
+            print(f"ok  {got}{evals}  ({r.seconds}s)")
             continue
         failed += 1
         if stats:
@@ -423,12 +432,13 @@ def cmd_medium(args):
         return entry if "/" in entry else f"tests/{entry}.{ext}"
 
     print(f"play: {args.play}  ({'AIDA' if args.aida else '--no-aida'}, timeout {args.timeout:g}s)")
+    print(f"method: {method(args)}")
     if args.hera:
         print(f"hera: {args.hera}  (reference only, timeout {args.hera_timeout:g}s)\n")
     else:
         print("hera: skipped\n")
     table = ["name\tknown_dist\ta0_lines\tvertices\tedges\tfaces\tmax_F\tmax_F_decimal"
-             "\tseconds\tstatus\thera\thera_seconds"]
+             "\tevaluations\tseconds\tstatus\thera\thera_seconds"]
     failed = 0
     try:
         for name, known, check, a, b in MEDIUM:
@@ -452,13 +462,13 @@ def cmd_medium(args):
             if stats:
                 summary = f"{stats[0]} lines, {stats[1]} vertices"
                 if not args.a0_only:
-                    summary += f", max F {stats[4]} ({check} {known})"
+                    summary += f", max F {stats[4]} ({check} {known}), {stats[6]} evaluations"
                 print(f"{'ok  ' if status == 'ok' else 'FAIL '}{summary}  ({r.seconds}s)  {ref}")
             else:
                 print(f"{ref}\n{outcome(r)}")
             if status != "ok":
                 failed += 1
-            table.append("\t".join([name, known, *(stats or [""] * 6), r.seconds, status,
+            table.append("\t".join([name, known, *(stats or [""] * 7), r.seconds, status,
                                     hera, hera_sec]))
     finally:
         print("\n" + "\n".join(table))
@@ -468,12 +478,21 @@ def cmd_medium(args):
 
 
 HERA_COLUMNS = ["file_a", "file_b", "a0_lines", "vertices", "edges", "faces", "max_F",
-                "max_F_decimal", "seconds", "hera_distance", "hera_seconds"]
+                "max_F_decimal", "evaluations", "seconds", "hera_distance", "hera_seconds"]
 
 
 def evaluated(args):
-    """Settings value: whether the max_F column is filled."""
-    return "skipped (--a0-only)" if args.a0_only else "on A0 vertices"
+    """Settings value: whether and how the max_F column is filled."""
+    return "skipped (--a0-only)" if args.a0_only else f"on A0 vertices, {method(args)}"
+
+
+def method(args):
+    """How play computes max F: every A0 vertex, or the red/green insertion."""
+    if args.a0_only:
+        return "A0 only (--a0-only)"
+    if args.incremental:
+        return f"incremental, {args.samples} samples, seed {args.seed}"
+    return "all A0 vertices"
 
 
 def cmd_finite(args):
@@ -562,7 +581,7 @@ def cmd_kerber(args):
                        "preprocess": "aida" if args.aida else "noaida",
                        "max_F": evaluated(args)},
                       {"play": args.play, "files": len(files), "pairs": len(pairs)},
-                      HERA_COLUMNS[:9], args.fresh)
+                      HERA_COLUMNS[:10], args.fresh)
     return benchmark(args, pairs, results)
 
 
@@ -584,6 +603,12 @@ def parse_args():
                        help=f"seconds per play run (default: {timeout or 'none'})")
         s.add_argument("--a0-only", action="store_true",
                        help="only build A0; do not evaluate F (play --a0-only)")
+        s.add_argument("--incremental", action="store_true",
+                       help="red/green insertion instead of evaluating F at every A0 vertex")
+        s.add_argument("--samples", type=int, default=50, metavar="K",
+                       help="with --incremental: random A0 vertices evaluated first (default: 50)")
+        s.add_argument("--seed", type=int, default=1, metavar="N",
+                       help="with --incremental: random seed (default: 1)")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()

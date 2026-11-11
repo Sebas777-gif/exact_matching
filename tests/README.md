@@ -67,7 +67,10 @@ shift by 1 in both coordinates to push (1, 1) onto (2, 2).
 (lines, vertices, edges, faces, max $F$ on the $A_0$ vertices) with the
 expected ones. Max $F$ is compared exactly, as a fraction. Every case uses
 `--no-aida`. It exits with 1 if a case fails, times out (30s), or is
-skipped. With `--a0-only` only the four $A_0$ counts are checked.
+skipped. With `--a0-only` only the four $A_0$ counts are checked. With
+`--incremental` the same expected values apply: the red/green insertion
+must find the same maximum, and the line also shows how many $F$
+evaluations it needed.
 
 ```bash
 ./bench.py small                     # all cases
@@ -244,9 +247,11 @@ a reference. The old `tests/results.txt` is not touched. `--no-aida` and
 Columns: `file_a`, `file_b`, `a0_lines`, `vertices`, `edges`, `faces`,
 `max_F` (exact, as play prints it), `max_F_decimal` (play's decimal; the
 exact fractions get long when the input grades are decimals, as in
-Kerber's files), `seconds`, and for `finite` and `random` also
-`hera_distance` and `hera_seconds`. Both `max_F` columns are empty with
-`--a0-only`.
+Kerber's files), `evaluations` (number of $F$ evaluations), `seconds`, and
+for `finite` and `random` also `hera_distance` and `hera_seconds`. These
+three columns are empty with `--a0-only`. The method (all vertices, or
+`--incremental` with its samples and seed) is part of the settings, so a
+results file never mixes the two.
 
 `--results PATH` writes elsewhere. The `#` lines at the top record the
 settings, including whether `max_F` was evaluated. Each pair's row is appended as soon as the pair is done, so

@@ -150,6 +150,9 @@ Two files, one module each:
 | `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for presentations (`.scc`, `.scc_k`, `.minpres_k`). |
 | `--no-aida` | Do not run mpfree or AIDA. Use the file as a raw presentation (or the in-process $H_d$ presentation of a `.bif`). |
 | `--a0-only` | Only build $A_0$ and print its counts; do not evaluate $F$. |
+| `--incremental` | Compute max $F$ on the $A_0$ vertices with the red/green insertion (`include/colored_arrangement.h`) instead of evaluating every vertex. The result is the same; the number of $F$ evaluations is usually smaller. |
+| `--samples k` | With `--incremental`: evaluate $F$ at $k$ random $A_0$ vertices first, half per strip, at least one (default 50). |
+| `--seed n` | With `--incremental`: seed of the sampling and of the insertion order (default 1). |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.
@@ -175,8 +178,9 @@ $A_0$ vertices. See `tests/README.md`.
 | `./bench.py kerber` | Feasible pairs of Kerber's `data_benchmarks/small_instances` |
 | `./bench.py random` | Every pair of `tests/random_bifiltrations` |
 
-`--a0-only` (every set) skips $F$. `./bench.py SET --help` lists the
-options of a set. `finite`, `kerber`, and
+`--a0-only` (every set) skips $F$; `--incremental` (with `--samples`,
+`--seed`) uses the red/green insertion, which must give the same max $F$.
+`./bench.py SET --help` lists the options of a set. `finite`, `kerber`, and
 `random` append one row per pair to a `*_a0.txt` file under `tests/` and
 resume where they stopped. They leave the old distance logs (`results.txt`,
 `finite_results_new.txt`, `small_instance_results*.txt`,
@@ -208,6 +212,9 @@ Max F on A0 vertices: 1 (1)
   `Arrangement has` is their sum (the line `bench.py` reads). Each strip is
   connected and the counts include its unbounded outer face, so Euler's
   formula $V - E + F = 2$ holds per strip and is a quick sanity check.
+- `F evaluations` is how often $F$ was evaluated: once per $A_0$ vertex by
+  default, or the samples plus the vertices the red/green insertion
+  reached with `--incremental`.
 - `Max F on … vertices` is the largest $F$ over the vertices of the flat
   strip, the steep strip, and both. The value is exact (a fraction such as
   `51/2`), followed by a decimal in parentheses, or `inf` when the modules
