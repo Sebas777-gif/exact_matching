@@ -6,6 +6,7 @@
 #include <tuple>
 #include <vector>
 
+#include <colored_arrangement.h>
 #include <matching_distance.h>
 
 using namespace matching;
@@ -85,6 +86,48 @@ void check_bottleneck(const char* name, const std::vector<Bar>& b1, const std::v
   }
 }
 
+// Checks the initial quadrilateral of the flat strip of (M, N): its counts
+// (outer face included), that the bounded faces are red and the outer face
+// green, and that inserting all A0 segments into it adds no vertices
+// besides those of A0.
+void check_quadrilateral(const char* name, const Module& M, const Module& N,
+                         std::size_t vertices, std::size_t edges, std::size_t faces,
+                         std::size_t red) {
+  Colored_arrangement arr;
+  std::size_t got_red = build_initial_quadrilateral(arr, M, N);
+  bool colors_ok = true;
+  std::size_t red_faces = 0;
+  for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f) {
+    if (f->is_unbounded()) {
+      colors_ok = colors_ok && f->data() == Color::green;
+    } else {
+      colors_ok = colors_ok && f->data() == Color::red;
+      ++red_faces;
+    }
+  }
+
+  // The quadrilateral plus the A0 segments must have exactly the vertices of A0.
+  std::set<Grade2> grades;
+  collect_grades(M, N, grades);
+  std::vector<X_monotone_curve_2> segments;
+  for (const Grade2& g : grades) segments.push_back(X_monotone_curve_2(dual_segment_of_grade(g)));
+  CGAL::insert(arr, segments.begin(), segments.end());
+  Arrangement_2 a0;
+  build_arrangement_A(a0, M, N);
+
+  Colored_arrangement fresh;
+  build_initial_quadrilateral(fresh, M, N);
+  bool ok = fresh.number_of_vertices() == vertices && fresh.number_of_edges() == edges
+      && fresh.number_of_faces() == faces && got_red == red && red_faces == red && colors_ok
+      && arr.number_of_vertices() == a0.number_of_vertices();
+  std::cout << (ok ? "ok    " : "FAIL  ") << "quadrilateral: " << name << "\n  got:       "
+            << fresh.number_of_vertices() << " vertices, " << fresh.number_of_edges()
+            << " edges, " << fresh.number_of_faces() << " faces, " << got_red << " red"
+            << (colors_ok ? "" : ", wrong colors") << "; with A0 segments "
+            << arr.number_of_vertices() << " vertices (A0: " << a0.number_of_vertices() << ")\n";
+  if (!ok) failures++;
+}
+
 }  // namespace
 
 int main() {
@@ -143,6 +186,31 @@ int main() {
   // The finite part ([0,10) to the diagonal, 5) dominates the infinite part (1).
   check_bottleneck("infinite and finite", { inf(1), fin(0, 10) }, { inf(2) }, FT(5));
   check_bottleneck("different numbers of infinite bars", { inf(1), inf(3) }, { inf(1) }, std::nullopt);
+
+  // Initial quadrilateral of the flat strip.
+  // ell vs span: grades (1,0), (1,2), (0,2), (3,2), (0,0). Endpoints at s = 0
+  // (t = y) span [0, 2], at s = 1 (t = y - x) span [-1, 2]: a quadrilateral.
+  {
+    Presentation ell = make_presentation({ {1, 0}, {0, 2} },
+        { { {1, 2}, {0} }, { {3, 2}, {1} } });
+    Presentation span = make_presentation({ {0, 0} }, { { {3, 2}, {0} } });
+    check_quadrilateral("ell vs span", as_module(ell), as_module(span), 4, 4, 2, 1);
+  }
+  // Intervals: grades (0,0), (1,1), (2,2). At s = 1 all endpoints are
+  // t = 0, so the wall s = 1 is a point and the region is a triangle.
+  {
+    Presentation long_iv = make_presentation({ {0, 0} }, { { {2, 2}, {0} } });
+    Presentation short_iv = make_presentation({ {0, 0} }, { { {1, 1}, {0} } });
+    check_quadrilateral("intervals (triangle)", as_module(long_iv), as_module(short_iv),
+                        3, 3, 2, 1);
+  }
+  // One grade (0,0) on both sides: the region is the single segment t = 0,
+  // with no red face.
+  {
+    Presentation free_one = make_presentation({ {0, 0} }, {});
+    check_quadrilateral("single grade (segment)", as_module(free_one), as_module(free_one),
+                        2, 1, 1, 0);
+  }
 
   if (failures) std::cout << failures << " case(s) failed\n";
   else std::cout << "all cases passed\n";
