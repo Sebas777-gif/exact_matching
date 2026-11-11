@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -33,6 +35,11 @@ using IndexVec = std::vector<Index>;
 
 struct Grade2 {
   FT x, y;
+};
+
+struct Bar {
+  FT birth, death;
+  bool infinite;
 };
 
 inline bool operator<(const Grade2& a, const Grade2& b) {
@@ -110,7 +117,7 @@ inline std::size_t build_arrangement_A(Arrangement_2& arr, const Module& M, cons
 }
 
 inline FT weighted_push(const Grade2& p, const FT& s, const FT& t) {
-  assert(s > 0);
+  assert(s >= 0);
   if (p.y > s * p.x + t) { // strictly above the slice
     if (s >= 1)
       return (p.y - t) / s;
@@ -166,6 +173,175 @@ inline phat::boundary_matrix<> build_slice_matrix(const Presentation& P,
     phat_matrix.set_col(n_gens + i, current_rel);
   }
   return phat_matrix;
+}
+
+inline std::vector<Bar> slice_barcode(const Presentation& P, const FT& s, const FT& t) {
+  std::vector<FT> proj_gen = project_generators(s, t, P);
+  std::vector<FT> proj_rel = project_relations(s, t, P);
+  IndexVec gen_order = get_sorted_indices(proj_gen);
+  IndexVec rel_order = get_sorted_indices(proj_rel);
+  phat::boundary_matrix<> phat_matrix = build_slice_matrix(P, gen_order, rel_order);
+  phat::persistence_pairs pairs;
+  phat::compute_persistence_pairs<phat::twist_reduction>(pairs, phat_matrix);
+
+  Index n_gens = P.generators.size();
+  std::vector<Bar> bars;
+  // each unmarked i < n_gens will be an infinite bar starting at gen_values[gen_order[i]]
+  std::vector<bool> is_finite(n_gens, false); 
+  for (Index i = 0; i < pairs.get_num_pairs(); i++) {
+    auto p = pairs.get_pair(i);
+    Index k = p.first;
+    Index j = p.second;
+    is_finite[k] = true;
+    Bar b;
+    b.birth = proj_gen[gen_order[k]];
+    b.death = proj_rel[rel_order[j - n_gens]];
+    b.infinite = false;
+    if (b.birth != b.death) bars.push_back(b);
+  }
+  for (Index i = 0; i < n_gens; i++)
+    if (!is_finite[i]) {
+      Bar b;
+      b.birth = proj_gen[gen_order[i]];
+      b.infinite = true;
+      bars.push_back(b);
+  }
+  return bars;
+}
+
+namespace detail {
+
+// Is there a matching of cost at most c between the finite barcodes A and B,
+// where a bar may also be matched to the diagonal? Costs are given as ranks
+// into the sorted list of candidate values, so c is a rank too:
+//   pair_rank[i][j]  rank of the cost of matching A[i] with B[j]
+//   diag_rank_A[i]   rank of the cost of matching A[i] to the diagonal
+//   diag_rank_B[j]   rank of the cost of matching B[j] to the diagonal
+//
+// This is a perfect matching problem on a bipartite graph with n + m
+// vertices per side:
+//   left:  A[0], ..., A[n-1], then a diagonal copy of each B[j] at n + j
+//   right: B[0], ..., B[m-1], then a diagonal copy of each A[i] at m + i
+// A[i] can go to B[j] or to its own diagonal copy, B[j] can go to A[i] or to
+// its own diagonal copy, and diagonal copies can always be matched to each
+// other (cost 0). It is solved with augmenting paths (Kuhn's algorithm).
+inline bool bottleneck_feasible(std::size_t c,
+    const std::vector<std::vector<std::size_t> >& pair_rank,
+    const std::vector<std::size_t>& diag_rank_A,
+    const std::vector<std::size_t>& diag_rank_B) {
+  const std::size_t n = diag_rank_A.size();
+  const std::size_t m = diag_rank_B.size();
+  const std::size_t N = n + m;
+
+  auto edge = [&](std::size_t l, std::size_t r) {
+    if (l < n && r < m) return pair_rank[l][r] <= c;   // A[l] with B[r]
+    if (l < n) return r - m == l && diag_rank_A[l] <= c; // A[l] to diagonal
+    if (r < m) return l - n == r && diag_rank_B[r] <= c; // B[r] to diagonal
+    return true;                                         // diagonal with diagonal
+  };
+
+  const std::size_t none = N;
+  std::vector<std::size_t> match_of_right(N, none);
+  std::vector<char> visited(N);
+
+  std::function<bool(std::size_t)> augment = [&](std::size_t l) {
+    for (std::size_t r = 0; r < N; r++) {
+      if (visited[r] || !edge(l, r)) continue;
+      visited[r] = 1;
+      if (match_of_right[r] == none || augment(match_of_right[r])) {
+        match_of_right[r] = l;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (std::size_t l = 0; l < N; l++) {
+    std::fill(visited.begin(), visited.end(), 0);
+    if (!augment(l)) return false;
+  }
+  return true;
+}
+
+}  // namespace detail
+
+// Exact bottleneck distance between two barcodes (L-infinity cost, a bar may
+// be matched to the diagonal at cost (death - birth) / 2).
+// Returns std::nullopt, meaning infinity, if the numbers of infinite bars differ.
+//
+// Infinite bars are matched to each other in order of birth. For the finite
+// bars the distance is one of the candidate values (a pair cost or a diagonal
+// cost); a binary search over the sorted candidates finds the smallest one
+// for which a matching exists.
+inline std::optional<FT> bottleneck_dist(const std::vector<Bar>& b1, const std::vector<Bar>& b2) {
+  std::vector<Bar> A, B;
+  std::vector<FT> inf_A, inf_B;
+  for (const Bar& b : b1) {
+    if (b.infinite) inf_A.push_back(b.birth);
+    else A.push_back(b);
+  }
+  for (const Bar& b : b2) {
+    if (b.infinite) inf_B.push_back(b.birth);
+    else B.push_back(b);
+  }
+
+  if (inf_A.size() != inf_B.size()) return std::nullopt;
+  std::sort(inf_A.begin(), inf_A.end());
+  std::sort(inf_B.begin(), inf_B.end());
+  FT result(0);
+  for (std::size_t k = 0; k < inf_A.size(); k++)
+    result = std::max(result, CGAL::abs(inf_A[k] - inf_B[k]));
+
+  const std::size_t n = A.size();
+  const std::size_t m = B.size();
+  if (n + m == 0) return result;
+
+  auto diag_cost = [](const Bar& b) { return (b.death - b.birth) / 2; };
+  auto pair_cost = [](const Bar& a, const Bar& b) {
+    return std::max(CGAL::abs(a.birth - b.birth), CGAL::abs(a.death - b.death));
+  };
+
+  std::vector<FT> candidates;
+  candidates.reserve(n * m + n + m);
+  for (const Bar& a : A) candidates.push_back(diag_cost(a));
+  for (const Bar& b : B) candidates.push_back(diag_cost(b));
+  for (const Bar& a : A)
+    for (const Bar& b : B) candidates.push_back(pair_cost(a, b));
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+  // Replace every cost by its rank, so the matching only compares integers.
+  auto rank = [&](const FT& x) -> std::size_t {
+    return std::lower_bound(candidates.begin(), candidates.end(), x) - candidates.begin();
+  };
+  std::vector<std::size_t> diag_rank_A(n), diag_rank_B(m);
+  std::vector<std::vector<std::size_t> > pair_rank(n, std::vector<std::size_t>(m));
+  for (std::size_t i = 0; i < n; i++) diag_rank_A[i] = rank(diag_cost(A[i]));
+  for (std::size_t j = 0; j < m; j++) diag_rank_B[j] = rank(diag_cost(B[j]));
+  for (std::size_t i = 0; i < n; i++)
+    for (std::size_t j = 0; j < m; j++) pair_rank[i][j] = rank(pair_cost(A[i], B[j]));
+
+  // The largest candidate always works: match every bar to the diagonal.
+  std::size_t lo = 0, hi = candidates.size() - 1;
+  while (lo < hi) {
+    std::size_t mid = (lo + hi) / 2;
+    if (detail::bottleneck_feasible(mid, pair_rank, diag_rank_A, diag_rank_B)) hi = mid;
+    else lo = mid + 1;
+  }
+  return std::max(result, candidates[lo]);
+}
+
+inline std::vector<Bar> module_barcode(const Module& M, const FT& s, const FT& t) {
+  std::vector<Bar> bars;
+  for (const Presentation& P : M.summands) {
+    std::vector<Bar> b = slice_barcode(P, s, t);
+    bars.insert(bars.end(), b.begin(), b.end());
+  }
+  return bars;
+}
+
+inline std::optional<FT> F(const Module& M, const Module& N, const FT& s, const FT& t) {
+  return bottleneck_dist(module_barcode(M, s, t), module_barcode(N, s, t));
 }
 
 }  // namespace matching
