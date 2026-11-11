@@ -40,41 +40,44 @@ def v10(sample):
 
 
 # small: name, expected "lines vertices edges faces", play arguments. Always
-# run with --no-aida. The comments give the matching distance d each pair
+# run with --no-aida. Lines are the flat strip's segments; the other three
+# are the totals of the flat and steep strips. The comments give the matching distance d each pair
 # was built for; it is not checked, since play does not evaluate F yet.
 SMALL = [
     # Rank-1 intervals (d = 1). Grades (0,0), (1,1), (2,2): all three
-    # duals and s = 1 meet at (s, t) = (1, 0).
-    ("interval scc", "5 4 15 12", ["tests/interval_long.scc", "tests/interval_short.scc"]),
-    ("interval bif", "5 4 15 12", ["tests/interval_long.bif", "tests/interval_short.bif"]),
+    # duals meet at (s, t) = (1, 0), so the wall s = 1 is a single point
+    # and is left out (3 segments + the wall s = 0). Each strip has
+    # 4 vertices, 5 edges, 3 faces.
+    ("interval scc", "4 8 10 6", ["tests/interval_long.scc", "tests/interval_short.scc"]),
+    ("interval bif", "4 8 10 6", ["tests/interval_long.bif", "tests/interval_short.bif"]),
     # Two origin vertices merging at (51,0) vs a single infinite bar
     # (d = 25.5). The .scc version adds unused grades at x, y in
     # {10, 20, 30} that only cut A0; the .bif version does not.
-    ("far_merge vs A0 anchors", "10 24 62 39", ["tests/far_merge.scc", "tests/a0_anchors.scc"]),
-    ("far_merge bif", "5 4 15 12", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
+    ("far_merge vs A0 anchors", "10 25 37 16", ["tests/far_merge.scc", "tests/a0_anchors.scc"]),
+    ("far_merge bif", "4 10 12 6", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
     # Horizontal merge at (50,0) vs vertical merge at (0,50) (d = 25).
-    ("horizontal vs vertical merge", "5 6 18 13",
+    ("horizontal vs vertical merge", "5 10 12 6",
      ["tests/merge_horizontal.scc", "tests/merge_vertical.scc"]),
     # Different numbers of infinite bars (d = infinity).
-    ("unmatched infinite bars", "4 3 11 9", ["tests/free_one.scc", "tests/free_two.scc"]),
+    ("unmatched infinite bars", "3 6 6 4", ["tests/free_one.scc", "tests/free_two.scc"]),
     # Raw H_2 presentations of two prism 2-skeleta (d = infinity).
-    ("prism H_2", "7 12 34 23", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
+    ("prism H_2", "7 14 20 10", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
     # L of two intervals vs one spanning interval (d = 1.5). The maximum of
     # F sits at (s, t) = (1, 1/2), on an A0 edge, not an A0 vertex.
-    ("ell vs span", "7 9 29 21", ["tests/ell.scc", "tests/span.scc"]),
+    ("ell vs span", "7 15 23 12", ["tests/ell.scc", "tests/span.scc"]),
 ]
 
 # small, skipped with --fast.
 SMALL_SLOW = [
     # far_merge with 140 unused relation grades (d = 25.5).
-    ("far_merge vs 140 A0 anchors", "144 5183 10581 5399",
+    ("far_merge vs 140 A0 anchors", "144 427 707 284",
      ["tests/far_merge.scc", "tests/a0_anchors_medium.scc"]),
     # Merge pair with ~140 distinct grades (d = 25).
-    ("horizontal vs vertical merge medium", "145 5493 11222 5730",
+    ("horizontal vs vertical merge medium", "145 608 1072 468",
      ["tests/merge_horizontal_medium.scc", "tests/merge_vertical_medium.scc"]),
     # Real 10-vertex 1-skeleta, H_0 (d = 3 and 2.5).
-    ("v10 bif sample 1 vs 2", "74 1966 4221 2256", [v10(1), v10(2), "--dim", "0"]),
-    ("v10 bif sample 1 vs 5", "71 1806 3883 2078", [v10(1), v10(5), "--dim", "0"]),
+    ("v10 bif sample 1 vs 2", "74 1131 2338 1211", [v10(1), v10(2), "--dim", "0"]),
+    ("v10 bif sample 1 vs 5", "71 983 2032 1053", [v10(1), v10(5), "--dim", "0"]),
 ]
 
 # medium: name, known matching distance, the two inputs. A bare name is a

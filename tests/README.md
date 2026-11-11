@@ -74,26 +74,28 @@ skipped.
 
 | Pair | $A_0$ (L V E F) | $d_\mathrm{match}$ | Why the pair exists |
 | --- | --- | --- | --- |
-| `interval_long` vs `interval_short` (`.scc` and `.bif`) | 5 4 15 12 | 1 | Rank-1 intervals. All three duals and $s=1$ meet at $(1,0)$ |
-| `far_merge` vs `a0_anchors` | 10 24 62 39 | 25.5 | Unbounded $A_0$ faces cut by extra dual lines at $x,y\in\{10,20,30\}$ |
-| `far_merge.bif` vs `a0_anchors.bif` | 5 4 15 12 | 25.5 | Same distance as a 1-critical $H_0$ bifiltration (no extra grades) |
-| `merge_horizontal` vs `merge_vertical` | 5 6 18 13 | 25 | Type-III slices; the limit $s\to+\infty$ matters |
-| `free_one` vs `free_two` | 4 3 11 9 | infinity | Unmatched infinite bars, $s>0$ |
-| `prism_1` vs `prism_2` `--dim 2` | 7 12 34 23 | infinity | Raw $H_2$ presentations of two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
-| `ell` vs `span` | 7 9 29 21 | 1.5 | Maximum of $F$ on an $A_0$ edge, not at an $A_0$ vertex |
-| `far_merge` vs `a0_anchors_medium` | 144 5183 10581 5399 | 25.5 | Same as above with 140 unused grades |
-| `merge_horizontal_medium` vs `merge_vertical_medium` | 145 5493 11222 5730 | 25 | Merge pair with ~140 distinct grades |
-| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 74 1966 4221 2256 | 3 | Real $H_0$ 1-skeleton |
-| `r_bif_v_10_…_sample_1` vs `sample_5` (`--dim 0`) | 71 1806 3883 2078 | 2.5 | Same, different sample |
+| `interval_long` vs `interval_short` (`.scc` and `.bif`) | 4 8 10 6 | 1 | Rank-1 intervals. All three duals meet at $(1,0)$ on $s=1$ |
+| `far_merge` vs `a0_anchors` | 10 25 37 16 | 25.5 | $A_0$ faces cut by extra dual segments at $x,y\in\{10,20,30\}$ |
+| `far_merge.bif` vs `a0_anchors.bif` | 4 10 12 6 | 25.5 | Same distance as a 1-critical $H_0$ bifiltration (no extra grades) |
+| `merge_horizontal` vs `merge_vertical` | 5 10 12 6 | 25 | Type-III slices; the vertical limit ($s=0$ of the steep strip) matters |
+| `free_one` vs `free_two` | 3 6 6 4 | infinity | Unmatched infinite bars, $s>0$ |
+| `prism_1` vs `prism_2` `--dim 2` | 7 14 20 10 | infinity | Raw $H_2$ presentations of two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
+| `ell` vs `span` | 7 15 23 12 | 1.5 | Maximum of $F$ on an $A_0$ edge, not at an $A_0$ vertex |
+| `far_merge` vs `a0_anchors_medium` | 144 427 707 284 | 25.5 | Same as above with 140 unused grades |
+| `merge_horizontal_medium` vs `merge_vertical_medium` | 145 608 1072 468 | 25 | Merge pair with ~140 distinct grades |
+| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 74 1131 2338 1211 | 3 | Real $H_0$ 1-skeleton |
+| `r_bif_v_10_…_sample_1` vs `sample_5` (`--dim 0`) | 71 983 2032 1053 | 2.5 | Same, different sample |
 
-The last four rows are skipped with `--fast`. The expected counts were
-recorded from the current CGAL build, with full dual lines (not clipped to
-$s \ge 0$). The line counts follow from the grades (distinct grades + 2).
-The small vertex counts can be checked by hand, as in the interval case,
-and every row satisfies Euler's formula $V - E + F = 1$.
+The last four rows are skipped with `--fast`. L is the number of segments
+in the flat strip (distinct grades, plus the walls $s=0$ and $s=1$ unless
+one is a single point). V, E, F are the totals of the flat and steep
+strips. The counts were recorded from the current CGAL build. The small
+vertex counts can be checked by hand, as in the interval case; the vertex
+counts of the `.scc` rows were also recounted with exact fractions in
+Python. Each strip satisfies Euler's formula $V - E + F = 2$.
 
 `ell.scc` is two intervals forming an L: $(1,0)\to(1,2)$ and $(0,2)\to(3,2)$.
-`span.scc` is one interval $(0,0)\to(3,2)$. $A_0$ has nine vertices; on
+`span.scc` is one interval $(0,0)\to(3,2)$. The flat strip has 7 vertices; on
 $s=1$ they sit at $t\in\{-1,0,1,2\}$. Between $t=0$ and $t=1$, $F$
 rises to $3/2$ (span's bar has weighted length 3 and goes to the diagonal;
 cross-matches with the L bars are no cheaper). That point $(s,t)=(1,1/2)$
@@ -155,8 +157,9 @@ The `--aida` grid stand-in is an 8×8 of real bars.
 Extra $H_0$ bars are a **star into the origin**. Isolated vertex-edge
 pairs would each add an extra infinite bar and send $d_\mathrm{match}$ to
 infinity. With x-axis stars all extra duals pass through $(s,t)=(0,0)$,
-so $A_0$ has many lines but few vertices (145 lines, 144 vertices for
-`far_merge.bif` vs `a0_anchors_medium.bif`).
+so the flat strip has many segments but few vertices (144 segments, 144
+vertices for `far_merge.bif` vs `a0_anchors_medium.bif`; the wall $s=0$ is a
+single point and is left out).
 
 ### Unused AIDA files
 

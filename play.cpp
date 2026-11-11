@@ -61,11 +61,25 @@ int main(int argc, char** argv) {
             << " summand(s) and " << modules[1].summands.size() << " summand(s)"
             << std::endl;
 
-  matching::Arrangement_2 arr;
-  const std::size_t nlines = matching::build_arrangement_A(arr, modules[0], modules[1]);
+  // Flat strip: slices y = s x + t with 0 <= s <= 1.
+  // Steep strip: slices x = s y + t with 0 <= s <= 1, i.e. the flat strip
+  // of the modules with x and y swapped.
+  matching::Arrangement_2 flat, steep;
+  const std::size_t nlines = matching::build_arrangement_A(flat, modules[0], modules[1]);
+  matching::build_arrangement_A(steep, matching::swapped_module(modules[0]),
+                                matching::swapped_module(modules[1]));
+
+  auto counts = [](const char* name, const matching::Arrangement_2& arr) {
+    std::cout << name << arr.number_of_vertices() << " vertices, "
+              << arr.number_of_edges() << " edges, "
+              << arr.number_of_faces() << " faces" << std::endl;
+  };
   std::cout << "A0 lines: " << nlines << std::endl;
-  std::cout << "Arrangement has " << arr.number_of_vertices() << " vertices, "
-            << arr.number_of_edges() << " edges, and "
-            << arr.number_of_faces() << " faces" << std::endl;
+  counts("Flat strip:  ", flat);
+  counts("Steep strip: ", steep);
+  std::cout << "Arrangement has "
+            << flat.number_of_vertices() + steep.number_of_vertices() << " vertices, "
+            << flat.number_of_edges() + steep.number_of_edges() << " edges, and "
+            << flat.number_of_faces() + steep.number_of_faces() << " faces" << std::endl;
   return 0;
 }

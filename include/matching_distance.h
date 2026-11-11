@@ -1,10 +1,12 @@
 #pragma once
 
-// Coarse arrangement A0 in the (s, t) plane of slices y = s x + t.
-// One dual ray per distinct input grade, plus the walls s = 0 and s = 1.
+// Coarse arrangement A0 in the strip 0 <= s <= 1 of the (s, t) plane of
+// slices y = s x + t: one dual segment per distinct input grade, plus the
+// walls s = 0 and s = 1. Slopes s > 1 are covered by the same strip for the
+// modules with x and y swapped (see swapped_module).
 
 #include <CGAL/Arrangement_2.h>
-#include <CGAL/Arr_linear_traits_2.h>
+#include <CGAL/Arr_segment_traits_2.h>
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 
 #include <algorithm>
@@ -24,9 +26,9 @@ namespace matching {
 
 typedef CGAL::Exact_predicates_exact_constructions_kernel Kernel;
 typedef Kernel::FT FT;
-typedef CGAL::Arr_linear_traits_2<Kernel> Traits_2;
+typedef Kernel::Segment_2 Segment_2;
+typedef CGAL::Arr_segment_traits_2<Kernel> Traits_2;
 typedef Traits_2::Point_2 Point_2;  // (s, t)
-typedef Traits_2::Line_2 Line_2;    // s = 0 and s = 1
 typedef Traits_2::X_monotone_curve_2 X_monotone_curve_2;
 typedef CGAL::Arrangement_2<Traits_2> Arrangement_2;
 
@@ -84,9 +86,10 @@ inline Module as_module(Presentation P) {
   return M;
 }
 
-// Dual of a grade v = (v_x, v_y): the slices through v, namely t = v_y - s v_x
-inline Line_2 dual_line_of_grade(const Grade2& v) {
-  return Line_2(v.x, FT(1), -v.y);
+// Dual of a grade v = (v_x, v_y): the slices through v, namely t = v_y - s v_x,
+// clipped to the strip 0 <= s <= 1.
+inline Segment_2 dual_segment_of_grade(const Grade2& v) {
+  return Segment_2(Point_2(FT(0), v.y), Point_2(FT(1), v.y - v.x));
 }
 
 inline void collect_grades(const Module& M, const Module& N, std::set<Grade2>& grades) {
@@ -101,17 +104,60 @@ inline void collect_grades(const Module& M, const Module& N, std::set<Grade2>& g
   add(N);
 }
 
-// Inserts A0 and returns how many lines were inserted.
+inline Module swapped_module(const Module& M) {
+  Module swap_M;
+  std::vector<Presentation> swap_summands;
+  for (const Presentation& P : M.summands) {
+    Presentation swap_P;
+    std::vector<Grade2> gens;
+    std::vector<Grade2> rels;
+    for (const Grade2& g : P.generators) {
+      Grade2 swap_g;
+      swap_g.y = g.x;
+      swap_g.x = g.y;
+      gens.push_back(swap_g);
+    }
+    for (const Grade2& g : P.relations) {
+      Grade2 swap_g;
+      swap_g.y = g.x;
+      swap_g.x = g.y;
+      rels.push_back(swap_g);
+    }
+    swap_P.generators = gens;
+    swap_P.relations = rels;
+    swap_P.columns = P.columns;
+    swap_summands.push_back(swap_P);
+  }
+  swap_M.summands = swap_summands;
+  return swap_M;
+}
+
+// Inserts A0 restricted to the strip 0 <= s <= 1 and returns how many
+// segments were inserted: one per distinct grade, plus the walls.
+// Each wall s = 0 and s = 1 runs from the lowest to the highest endpoint of
+// a dual segment on it. A wall whose endpoints all coincide is a single
+// point, which is already a vertex, so it is left out.
 inline std::size_t build_arrangement_A(Arrangement_2& arr, const Module& M, const Module& N) {
   std::set<Grade2> grades;
   collect_grades(M, N, grades);
+  if (grades.empty()) return 0;
 
   std::vector<X_monotone_curve_2> curves;
   curves.reserve(grades.size() + 2);
-  for (const Grade2& g : grades)
-    curves.push_back(X_monotone_curve_2(dual_line_of_grade(g)));
-  curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(1), FT(0)), Point_2(FT(1), FT(1)))));
-  curves.push_back(X_monotone_curve_2(Line_2(Point_2(FT(0), FT(0)), Point_2(FT(0), FT(1)))));
+  FT t0_min = grades.begin()->y, t0_max = t0_min;
+  FT t1_min = grades.begin()->y - grades.begin()->x, t1_max = t1_min;
+  for (const Grade2& g : grades) {
+    Segment_2 seg = dual_segment_of_grade(g);
+    curves.push_back(X_monotone_curve_2(seg));
+    t0_min = std::min(t0_min, seg.source().y());
+    t0_max = std::max(t0_max, seg.source().y());
+    t1_min = std::min(t1_min, seg.target().y());
+    t1_max = std::max(t1_max, seg.target().y());
+  }
+  if (t0_min < t0_max)
+    curves.push_back(X_monotone_curve_2(Point_2(FT(0), t0_min), Point_2(FT(0), t0_max)));
+  if (t1_min < t1_max)
+    curves.push_back(X_monotone_curve_2(Point_2(FT(1), t1_min), Point_2(FT(1), t1_max)));
   CGAL::insert(arr, curves.begin(), curves.end());
   return curves.size();
 }

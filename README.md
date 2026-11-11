@@ -4,11 +4,21 @@ Goal: compute the matching distance between two 2-parameter persistence
 modules from finite presentations, following Kerber, Lesnick, and Oudot,
 [*Exact Computation of the Matching Distance on 2-Parameter Persistence Modules*](https://arxiv.org/abs/1812.09085).
 
-**Current state:** the program only builds the coarse arrangement $A_0$ in
-the $(s,t)$ parameter plane of slices $y = sx + t$. $A_0$ has one dual line
-$t = v_y - s\,v_x$ per distinct input grade $v$ of either module, plus the
-lines $s=0$ and $s=1$. It does **not** evaluate $F$, refine $A_0$ to $A$,
-or print a matching distance yet.
+**Current state:** the program only builds the coarse arrangement $A_0$,
+in two strips of the $(s,t)$ parameter plane:
+
+- the **flat strip**: slices $y = sx + t$ with $0 \le s \le 1$;
+- the **steep strip**: slices $x = sy + t$ with $0 \le s \le 1$, built the
+  same way from the modules with $x$ and $y$ swapped.
+
+Together they cover every slice of positive slope, including the horizontal
+($s=0$ in the flat strip) and vertical ($s=0$ in the steep strip) limits,
+and every crossing appears in exactly one strip (crossings on $s=1$ in both).
+In each strip, $A_0$ has one dual segment $t = v_y - s\,v_x$,
+$0 \le s \le 1$, per distinct input grade $v$ of either module, plus the
+walls $s=0$ and $s=1$. Each wall runs from the lowest to the highest segment
+endpoint on it, and is left out if those coincide. The program does **not**
+evaluate $F$, refine $A_0$ to $A$, or print a matching distance yet.
 
 An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
 per face, using only the comparison lines of the current realizing pair.
@@ -171,36 +181,44 @@ Typical run:
 ```plain
 $ ./play --no-aida tests/interval_long.scc tests/interval_short.scc
 Loaded 2 module(s) with 1 summand(s) and 1 summand(s)
-A0 lines: 5
-Arrangement has 4 vertices, 15 edges, and 12 faces
+A0 lines: 4
+Flat strip:  4 vertices, 5 edges, 3 faces
+Steep strip: 4 vertices, 5 edges, 3 faces
+Arrangement has 8 vertices, 10 edges, and 6 faces
 ```
 
 - `Loaded` reports the number of summands per module (AIDA's indecomposables,
   or 1 with `--no-aida`).
-- `A0 lines` is the number of lines of $A_0$: one dual line per distinct grade
-  of both modules, plus $s=0$ and $s=1$.
-- The arrangement counts are CGAL's for the whole $(s,t)$ plane. Vertices
-  are finite intersection points; edges include the infinite pieces. Euler's
-  formula $V - E + F = 1$ holds and is a quick sanity check. The half-plane
-  $s<0$ is not part of the slice parameter space, but it is not clipped.
+- `A0 lines` is the number of segments inserted into the flat strip: one
+  dual segment per distinct grade of both modules, plus the walls that are
+  not a single point.
+- `Flat strip` and `Steep strip` are CGAL's counts for each strip.
+  `Arrangement has` is their sum (the line `bench.py` reads). Each strip is
+  connected and the counts include its unbounded outer face, so Euler's
+  formula $V - E + F = 2$ holds per strip and is a quick sanity check.
 
 In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
-dual lines and $s=1$ all meet at $(s,t)=(1,0)$, which leaves 4 vertices.
+dual segments run from $(0,0)$, $(0,1)$, $(0,2)$ and all end at
+$(s,t)=(1,0)$. So the wall $s=1$ is a single point and is left out, and
+each strip has 4 vertices, the wall $s=0$ split in two plus the three
+segments as 5 edges, and two triangles plus the outer face as 3 faces.
 
-Two dual lines meet at the slice through both grades. That slice has
-positive slope exactly when the grades are comparable, so every vertex in
-$s<0$ comes from a pair of incomparable grades. Clipping the dual lines to
-rays starting at $s=0$ removes those vertices; this was tried (commit
-`8c99912`) and undone for simplicity. It roughly halves the vertex count on
-the random bifiltrations.
+Two dual lines meet at the slice through both grades. Within $0 < s < 1$
+of the flat strip that slice has slope $s$; a crossing with slope $s > 1$ is
+in the steep strip at slope $1/s$, and a crossing with $s < 0$ (incomparable
+grades) is in neither. Clipping to the two strips gives about half the
+vertices of the old full arrangement of lines (up to commit
+`626481d`).
 
 If not exactly two input files are given, the program exits with an error.
 
 ## Complexity
 
-The coarse arrangement $A_0$ has $O(n)$ lines and $O(n^2)$ vertices, where
-$n$ is the number of distinct grades. It is built with exact arithmetic in
-one `CGAL::insert` (a sweep). For two 100-vertex random bifiltrations
-(`r_bif_v_100_…_sample_1` vs `sample_2`, `--dim 0`) that is 324 lines and
-about 42k vertices in about 2s with AIDA (preprocessing included), or 419
-lines and about 72k vertices in about 4s with `--no-aida`.
+The coarse arrangement $A_0$ has $O(n)$ segments and $O(n^2)$ vertices per
+strip, where $n$ is the number of distinct grades. Each strip is built with
+exact arithmetic in one `CGAL::insert` (a sweep). For two 100-vertex random
+bifiltrations (`r_bif_v_100_…_sample_1` vs `sample_2`, `--dim 0`) that is
+324 segments and about 23k vertices over both strips in about 1.1s with
+AIDA (preprocessing included), or 419 segments and about 43k vertices in
+about 3s with `--no-aida`. The full arrangement of lines had 42k and 72k
+vertices.
