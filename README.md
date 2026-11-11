@@ -17,8 +17,14 @@ and every crossing appears in exactly one strip (crossings on $s=1$ in both).
 In each strip, $A_0$ has one dual segment $t = v_y - s\,v_x$,
 $0 \le s \le 1$, per distinct input grade $v$ of either module, plus the
 walls $s=0$ and $s=1$. Each wall runs from the lowest to the highest segment
-endpoint on it, and is left out if those coincide. The program does **not**
-evaluate $F$, refine $A_0$ to $A$, or print a matching distance yet.
+endpoint on it, and is left out if those coincide.
+
+The program then evaluates $F$ (the weighted bottleneck distance of the two
+slice barcodes, computed exactly) at every vertex of both strips and prints
+the maximum. That is a **lower bound** on the matching distance, not the
+matching distance: the maximum of $F$ can lie on an edge of $A_0$ (see
+`ell` vs `span` in `tests/README.md`). The refinement of $A_0$ to $A$ is
+not implemented yet.
 
 An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
 per face, using only the comparison lines of the current realizing pair.
@@ -143,6 +149,7 @@ Two files, one module each:
 | --- | --- |
 | `--dim d` | Homology dimension used when reading `.bif` files (default 0). Ignored for presentations (`.scc`, `.scc_k`, `.minpres_k`). |
 | `--no-aida` | Do not run mpfree or AIDA. Use the file as a raw presentation (or the in-process $H_d$ presentation of a `.bif`). |
+| `--a0-only` | Only build $A_0$ and print its counts; do not evaluate $F$. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.
@@ -156,18 +163,20 @@ Flags may appear before or after the file names. Any other `--flag`
 ### Tests and benchmarks
 
 `bench.py` (Python 3, standard library only) runs play on fixed sets of
-pairs. Every set checks or records what play prints now: the number of
-$A_0$ lines and the vertex, edge, and face counts. See `tests/README.md`.
+pairs. Every set checks or records what play prints: the number of $A_0$
+lines, the vertex, edge, and face counts, and the maximum of $F$ on the
+$A_0$ vertices. See `tests/README.md`.
 
 | Command | What it does |
 | --- | --- |
-| `./bench.py small` | Regression: exact $A_0$ counts for small pairs, exit 1 on a mismatch (`--fast` skips the ~140-line cases) |
-| `./bench.py medium` | Timing set, `--no-aida` by default, `--aida` for mpfree+AIDA. Prints the known distance and Hera's value as a reference (`--no-hera` skips Hera) |
-| `./bench.py finite` | $A_0$ for the 18 finite pairs of the old `tests/results.txt`, AIDA by default |
-| `./bench.py kerber` | $A_0$ for feasible pairs of Kerber's `data_benchmarks/small_instances` |
-| `./bench.py random` | $A_0$ for every pair of `tests/random_bifiltrations` |
+| `./bench.py small` | Regression: exact $A_0$ counts and max $F$ (derived by hand) for small pairs, exit 1 on a mismatch (`--fast` skips the ~140-line cases) |
+| `./bench.py medium` | Larger pairs with known distances $d$, `--no-aida` by default, `--aida` for mpfree+AIDA. Checks max $F = d$ (synthetic pairs) or max $F \le d$, exit 1 otherwise. Prints Hera's value as a reference (`--no-hera` skips Hera) |
+| `./bench.py finite` | The 18 finite pairs of the old `tests/results.txt`, AIDA by default |
+| `./bench.py kerber` | Feasible pairs of Kerber's `data_benchmarks/small_instances` |
+| `./bench.py random` | Every pair of `tests/random_bifiltrations` |
 
-`./bench.py SET --help` lists the options of a set. `finite`, `kerber`, and
+`--a0-only` (every set) skips $F$. `./bench.py SET --help` lists the
+options of a set. `finite`, `kerber`, and
 `random` append one row per pair to a `*_a0.txt` file under `tests/` and
 resume where they stopped. They leave the old distance logs (`results.txt`,
 `finite_results_new.txt`, `small_instance_results*.txt`,
@@ -185,6 +194,9 @@ A0 lines: 4
 Flat strip:  4 vertices, 5 edges, 3 faces
 Steep strip: 4 vertices, 5 edges, 3 faces
 Arrangement has 8 vertices, 10 edges, and 6 faces
+Max F on flat strip vertices:  1 (1)
+Max F on steep strip vertices: 1 (1)
+Max F on A0 vertices: 1 (1)
 ```
 
 - `Loaded` reports the number of summands per module (AIDA's indecomposables,
@@ -196,6 +208,10 @@ Arrangement has 8 vertices, 10 edges, and 6 faces
   `Arrangement has` is their sum (the line `bench.py` reads). Each strip is
   connected and the counts include its unbounded outer face, so Euler's
   formula $V - E + F = 2$ holds per strip and is a quick sanity check.
+- `Max F on … vertices` is the largest $F$ over the vertices of the flat
+  strip, the steep strip, and both. The value is exact (a fraction such as
+  `51/2`), followed by a decimal in parentheses, or `inf` when the modules
+  have different numbers of infinite bars.
 
 In the example the grades are $(0,0)$, $(1,1)$, and $(2,2)$. Their three
 dual segments run from $(0,0)$, $(0,1)$, $(0,2)$ and all end at

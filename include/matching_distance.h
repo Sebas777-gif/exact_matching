@@ -163,15 +163,8 @@ inline std::size_t build_arrangement_A(Arrangement_2& arr, const Module& M, cons
 }
 
 inline FT weighted_push(const Grade2& p, const FT& s, const FT& t) {
-  assert(s >= 0);
-  if (p.y > s * p.x + t) { // strictly above the slice
-    if (s >= 1)
-      return (p.y - t) / s;
-    return p.y;
-  }
-  if (s >= 1)
-    return p.x;
-  return s * p.x + t;
+  assert(s >= 0 && s <= 1);
+  return std::max(p.y, s * p.x + t);
 }
 
 // adapted from Hera (persistence_module.hpp)
@@ -388,6 +381,18 @@ inline std::vector<Bar> module_barcode(const Module& M, const FT& s, const FT& t
 
 inline std::optional<FT> F(const Module& M, const Module& N, const FT& s, const FT& t) {
   return bottleneck_dist(module_barcode(M, s, t), module_barcode(N, s, t));
+}
+
+// Largest F over the vertices of one strip. std::nullopt means infinity.
+inline std::optional<FT> max_F_on_vertices(const Arrangement_2& arr,
+    const Module& M, const Module& N) {
+  FT best(0);
+  for (auto v = arr.vertices_begin(); v != arr.vertices_end(); ++v) {
+    std::optional<FT> f = F(M, N, v->point().x(), v->point().y());
+    if (!f) return std::nullopt;
+    best = std::max(best, *f);
+  }
+  return best;
 }
 
 }  // namespace matching

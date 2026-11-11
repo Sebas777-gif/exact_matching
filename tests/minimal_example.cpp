@@ -102,9 +102,12 @@ int main() {
   check("one relation, y = x/2 + 1", P1, FT(1) / 2, FT(1),
         { fin(5, 6), inf(FT(3) / 2), inf(3) });
 
-  // Same module on the steep slice y = 2x - 4. g1 and g2 lie above it and
-  // push to (y + 4) / 2; g0 and r0 lie below it and push to x.
-  check("one relation, y = 2x - 4", P1, FT(2), FT(-4),
+  // Same module on the steep slice y = 2x - 4, which is x = y/2 + 2: the
+  // slice (s, t) = (1/2, 2) of the swapped chart. There every grade pushes
+  // to max(x, y/2 + 2): g0 = (5,5) to 5, g1 = (1,1) to 5/2, g2 = (3,3) to
+  // 7/2, and r0 = (6,6) to 6.
+  Presentation P1_swapped = swapped_module(as_module(P1)).summands[0];
+  check("one relation, y = 2x - 4 (swapped chart)", P1_swapped, FT(1) / 2, FT(2),
         { fin(5, 6), inf(FT(5) / 2), inf(FT(7) / 2) });
 
   // Relations listed out of order: r0 = g1 at (7,7), r1 = g1 + g2 at (4,4).

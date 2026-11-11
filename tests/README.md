@@ -1,10 +1,12 @@
 # Sample presentations, tests, and benchmarks
 
-`play` currently builds the coarse arrangement $A_0$ and nothing more. The
-sets of `../bench.py` check or record its output: the number of $A_0$
-lines and the vertex, edge, and face counts. The matching distances listed
-here are the values each pair was built for. They are kept as reference
-values for when $F$ is evaluated again. Nothing checks them right now.
+`play` builds the coarse arrangement $A_0$ (flat and steep strip) and
+evaluates $F$ at its vertices. The sets of `../bench.py` check or record its
+output: the number of $A_0$ lines, the vertex, edge, and face counts, and
+max $F$ on the $A_0$ vertices. The matching distances listed here are the
+values each pair was built for. Since $F \le d_\mathrm{match}$ on every
+slice, max $F$ on the vertices can never exceed them; it reaches them
+unless the maximum of $F$ lies off the vertices.
 
 The pair lists of all sets are tables at the top of `bench.py`.
 `./bench.py SET --help` lists the options of a set. In every set, Ctrl+N
@@ -61,10 +63,11 @@ shift by 1 in both coordinates to push (1, 1) onto (2, 2).
 
 ## Small regression tests
 
-`./bench.py small` builds $A_0$ for each pair and compares the four numbers
-(lines, vertices, edges, faces) with the expected ones. Every case uses
+`./bench.py small` runs play on each pair and compares the five numbers
+(lines, vertices, edges, faces, max $F$ on the $A_0$ vertices) with the
+expected ones. Max $F$ is compared exactly, as a fraction. Every case uses
 `--no-aida`. It exits with 1 if a case fails, times out (30s), or is
-skipped.
+skipped. With `--a0-only` only the four $A_0$ counts are checked.
 
 ```bash
 ./bench.py small                     # all cases
@@ -72,19 +75,19 @@ skipped.
 ./bench.py small --play other/play   # or PLAY_BIN=other/play
 ```
 
-| Pair | $A_0$ (L V E F) | $d_\mathrm{match}$ | Why the pair exists |
-| --- | --- | --- | --- |
-| `interval_long` vs `interval_short` (`.scc` and `.bif`) | 4 8 10 6 | 1 | Rank-1 intervals. All three duals meet at $(1,0)$ on $s=1$ |
-| `far_merge` vs `a0_anchors` | 10 25 37 16 | 25.5 | $A_0$ faces cut by extra dual segments at $x,y\in\{10,20,30\}$ |
-| `far_merge.bif` vs `a0_anchors.bif` | 4 10 12 6 | 25.5 | Same distance as a 1-critical $H_0$ bifiltration (no extra grades) |
-| `merge_horizontal` vs `merge_vertical` | 5 10 12 6 | 25 | Type-III slices; the vertical limit ($s=0$ of the steep strip) matters |
-| `free_one` vs `free_two` | 3 6 6 4 | infinity | Unmatched infinite bars, $s>0$ |
-| `prism_1` vs `prism_2` `--dim 2` | 7 14 20 10 | infinity | Raw $H_2$ presentations of two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
-| `ell` vs `span` | 7 15 23 12 | 1.5 | Maximum of $F$ on an $A_0$ edge, not at an $A_0$ vertex |
-| `far_merge` vs `a0_anchors_medium` | 144 427 707 284 | 25.5 | Same as above with 140 unused grades |
-| `merge_horizontal_medium` vs `merge_vertical_medium` | 145 608 1072 468 | 25 | Merge pair with ~140 distinct grades |
-| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 74 1131 2338 1211 | 3 | Real $H_0$ 1-skeleton |
-| `r_bif_v_10_…_sample_1` vs `sample_5` (`--dim 0`) | 71 983 2032 1053 | 2.5 | Same, different sample |
+| Pair | $A_0$ (L V E F) | max $F$ | $d_\mathrm{match}$ | Why the pair exists |
+| --- | --- | --- | --- | --- |
+| `interval_long` vs `interval_short` (`.scc` and `.bif`) | 4 8 10 6 | 1 | 1 | Rank-1 intervals. All three duals meet at $(1,0)$ on $s=1$ |
+| `far_merge` vs `a0_anchors` | 10 25 37 16 | 51/2 | 25.5 | $A_0$ faces cut by extra dual segments at $x,y\in\{10,20,30\}$ |
+| `far_merge.bif` vs `a0_anchors.bif` | 4 10 12 6 | 51/2 | 25.5 | Same distance as a 1-critical $H_0$ bifiltration (no extra grades) |
+| `merge_horizontal` vs `merge_vertical` | 5 10 12 6 | 25 | 25 | Type-III slices; the maximum is at the horizontal slice $y=0$ ($s=0$) |
+| `free_one` vs `free_two` | 3 6 6 4 | inf | infinity | Unmatched infinite bars, $s>0$ |
+| `prism_1` vs `prism_2` `--dim 2` | 7 14 20 10 | inf | infinity | Raw $H_2$ presentations of two prism 2-skeleta (8 vs 9 triangles, no 3-simplices) |
+| `ell` vs `span` | 7 15 23 12 | 1 | 1.5 | Maximum of $F$ on an $A_0$ edge, not at an $A_0$ vertex |
+| `far_merge` vs `a0_anchors_medium` | 144 427 707 284 | 51/2 | 25.5 | Same as above with 140 unused grades |
+| `merge_horizontal_medium` vs `merge_vertical_medium` | 145 608 1072 468 | 25 | 25 | Merge pair with ~140 distinct grades |
+| `r_bif_v_10_…_sample_1` vs `sample_2` (`--dim 0`) | 74 1131 2338 1211 | 3 | 3 | Real $H_0$ 1-skeleton |
+| `r_bif_v_10_…_sample_1` vs `sample_5` (`--dim 0`) | 71 983 2032 1053 | 5/2 | 2.5 | Same, different sample |
 
 The last four rows are skipped with `--fast`. L is the number of segments
 in the flat strip (distinct grades, plus the walls $s=0$ and $s=1$ unless
@@ -93,6 +96,27 @@ strips. The counts were recorded from the current CGAL build. The small
 vertex counts can be checked by hand, as in the interval case; the vertex
 counts of the `.scc` rows were also recounted with exact fractions in
 Python. Each strip satisfies Euler's formula $V - E + F = 2$.
+
+Max $F$ is derived by hand for every row except the two `r_bif_v_10`
+rows; the derivations are comments in the `SMALL` table of `bench.py`. In
+short:
+
+- **Intervals:** at the vertex $(1,0)$ (the slice $y=x$) the bars are
+  $[0,2)$ and $[0,1)$; pairing them costs 1 $= d$.
+- **`far_merge`:** both infinite bars start at the push of $(0,0)$; the
+  finite bar goes to the diagonal at cost $51/2 = d$ at the vertex $(1,0)$.
+  The extra grades of `a0_anchors` and `a0_anchors_medium` are empty
+  relations, which change $A_0$ but not the barcodes.
+- **Merges:** at the vertex $(0,0)$ of the flat strip (the horizontal slice
+  $y=0$) the horizontal bar has length 0 and the vertical bar is $[0,50)$,
+  so $F = 25 = d$.
+- **`free`, `prism`:** different numbers of infinite bars, so $F=\infty$
+  on every slice.
+- **`ell` vs `span`:** evaluated by hand at all 7 flat and 8 steep
+  vertices; the largest value is 1, at $(1,0)$ in both strips.
+
+The two `r_bif_v_10` values were recorded from play. They equal the known
+distances, which are the largest values possible.
 
 `ell.scc` is two intervals forming an L: $(1,0)\to(1,2)$ and $(0,2)\to(3,2)$.
 `span.scc` is one interval $(0,0)\to(3,2)$. The flat strip has 7 vertices; on
@@ -113,13 +137,22 @@ change the slice barcodes, only the arrangement.
 
 ## Medium set
 
-`./bench.py medium` builds $A_0$ for a larger set of pairs and prints a TSV
+`./bench.py medium` runs play on a larger set of pairs and prints a TSV
 summary (`name`, `known_dist`, `a0_lines`, `vertices`, `edges`, `faces`,
-`seconds`, `status`, `hera`, `hera_seconds`). A case passes when play exits
-cleanly and prints the $A_0$ counts. The known distance and Hera's
-`matching_dist` value (on the matching `.bif` files; `--hera PATH` or
-`HERA_BIN` if set, otherwise auto-detected) are reference columns only.
-Building $A_0$ takes well under a second per case here; Hera is the slow
+`max_F`, `max_F_decimal`, `seconds`, `status`, `hera`, `hera_seconds`). A case passes when
+play exits cleanly and max $F$ on the $A_0$ vertices passes its check
+against the known distance $d$:
+
+- **Synthetic pairs** (`far_merge*`, `merge_*`): max $F = d$. The arguments
+  are the ones of the corresponding small cases; the extra short bars of the
+  `.bif` versions used with `--aida` cost at most 1/2.
+- **`v10` pairs:** max $F \le d$, since $F \le d$ on every slice. Nothing
+  more is known by hand.
+
+The script exits with 1 if a case fails. Hera's `matching_dist` value (on
+the matching `.bif` files; `--hera PATH` or `HERA_BIN` if set, otherwise
+auto-detected) is a reference column only. Play takes well under a second
+per case here without AIDA and up to about 3s with it; Hera is the slow
 part (`--hera-timeout`, default 30s).
 
 ```bash
@@ -128,21 +161,23 @@ part (`--hera-timeout`, default 30s).
 ./bench.py medium --no-hera           # skip the Hera reference
 ```
 
-| Pair | Known distance |
-| --- | --- |
-| `far_merge` vs `a0_anchors_medium` | 25.5 |
-| `far_merge_41` vs `a0_anchors_medium` | 20.5 |
-| `far_merge` vs `a0_anchors_grid` (10×10 dummy grades) | 25.5 |
-| `merge_horizontal_medium` vs `merge_vertical_medium` (L=50) | 25 |
-| `merge_h40_medium` vs `merge_v40_medium` | 20 |
-| `merge_h60_medium` vs `merge_v60_medium` | 30 |
-| v10 n50 samples 1 vs 2 | 3 |
-| v10 n50 samples 1 vs 5 | 2.5 |
-| v10 n50 samples 2 vs 8 | 3 |
-| v10 n50 samples 3 vs 7 | 4.5 |
-| v10 n50 samples 4 vs 9 | 6 |
-| v10 n50 samples 7 vs 10 | 3 |
-| v10 n50 samples 8 vs 10 | 3 |
+| Pair | Known distance | Check |
+| --- | --- | --- |
+| `far_merge` vs `a0_anchors_medium` | 25.5 | = |
+| `far_merge_41` vs `a0_anchors_medium` | 20.5 | = |
+| `far_merge` vs `a0_anchors_grid` (10×10 dummy grades) | 25.5 | = |
+| `merge_horizontal_medium` vs `merge_vertical_medium` (L=50) | 25 | = |
+| `merge_h40_medium` vs `merge_v40_medium` | 20 | = |
+| `merge_h60_medium` vs `merge_v60_medium` | 30 | = |
+| v10 n50 samples 1 vs 2 | 3 | ≤ |
+| v10 n50 samples 1 vs 5 | 2.5 | ≤ |
+| v10 n50 samples 2 vs 8 | 3 | ≤ |
+| v10 n50 samples 3 vs 7 | 4.5 | ≤ |
+| v10 n50 samples 4 vs 9 | 6 | ≤ |
+| v10 n50 samples 7 vs 10 | 3 | ≤ |
+| v10 n50 samples 8 vs 10 | 3 | ≤ |
+
+In the current version every `v10` pair reaches its known distance.
 
 `--aida` drops `--no-aida` so play runs mpfree then AIDA. Dummy empty
 relation columns in the `*_medium.scc` files disappear under AIDA, which
@@ -206,8 +241,15 @@ a reference. The old `tests/results.txt` is not touched. `--no-aida` and
 | `random` | `tests/results_a0.txt` |
 | `kerber` | `tests/small_instance_results_a0.txt` |
 
+Columns: `file_a`, `file_b`, `a0_lines`, `vertices`, `edges`, `faces`,
+`max_F` (exact, as play prints it), `max_F_decimal` (play's decimal; the
+exact fractions get long when the input grades are decimals, as in
+Kerber's files), `seconds`, and for `finite` and `random` also
+`hera_distance` and `hera_seconds`. Both `max_F` columns are empty with
+`--a0-only`.
+
 `--results PATH` writes elsewhere. The `#` lines at the top record the
-settings. Each pair's row is appended as soon as the pair is done, so
+settings, including whether `max_F` was evaluated. Each pair's row is appended as soon as the pair is done, so
 Ctrl+C keeps every completed row. If Ctrl+C hits while play runs after
 Hera finished, the row has Hera's value and empty $A_0$ columns.
 

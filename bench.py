@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Regression tests and benchmarks for play, which builds the A0 arrangement.
+"""Regression tests and benchmarks for play, which builds the A0 arrangement
+and evaluates F on its vertices (max F on A0 vertices, a lower bound on the
+matching distance).
 
-  ./bench.py small [--fast]    exact A0 counts for small pairs; exit 1 on a mismatch
-  ./bench.py medium [--aida]   larger pairs with known distances, Hera as reference
+  ./bench.py small [--fast]    exact A0 counts and max F for small pairs; exit 1 on a mismatch
+  ./bench.py medium [--aida]   larger pairs with known distances; checks max F against them
   ./bench.py finite            the 18 random pairs with a finite matching distance
   ./bench.py random            every pair of tests/random_bifiltrations/*.bif
   ./bench.py kerber            feasible pairs of data_benchmarks/small_instances
 
 finite, random, and kerber append one row per pair to a results file and
-resume where they stopped. ./bench.py SET --help lists the options of a set.
+resume where they stopped. --a0-only skips F (play --a0-only) in every set.
+./bench.py SET --help lists the options of a set.
 Ctrl+N skips the running pair. Ctrl+C stops and keeps all completed rows.
 """
 
@@ -26,6 +29,7 @@ import time
 import tty
 from collections import defaultdict
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -39,61 +43,91 @@ def v10(sample):
     return f"tests/random_bifiltrations/r_bif_v_10_dim_2_n_top_simplices_50_sample_{sample}.bif"
 
 
-# small: name, expected "lines vertices edges faces", play arguments. Always
-# run with --no-aida. Lines are the flat strip's segments; the other three
-# are the totals of the flat and steep strips. The comments give the matching distance d each pair
-# was built for; it is not checked, since play does not evaluate F yet.
+# small: name, expected "lines vertices edges faces", expected max F on the
+# A0 vertices (exact, as play prints it), play arguments. Always run with
+# --no-aida. Lines are the flat strip's segments; the other three are the
+# totals of the flat and steep strips.
+#
+# d is the matching distance each pair was built for. Max F is derived by
+# hand unless the comment says otherwise. Since F <= d on every slice, a
+# vertex with F = d shows max F = d. Pushes: max(y, s x + t) in the flat
+# strip, max(x, s y + t) in the steep strip.
 SMALL = [
     # Rank-1 intervals (d = 1). Grades (0,0), (1,1), (2,2): all three
     # duals meet at (s, t) = (1, 0), so the wall s = 1 is a single point
     # and is left out (3 segments + the wall s = 0). Each strip has
-    # 4 vertices, 5 edges, 3 faces.
-    ("interval scc", "4 8 10 6", ["tests/interval_long.scc", "tests/interval_short.scc"]),
-    ("interval bif", "4 8 10 6", ["tests/interval_long.bif", "tests/interval_short.bif"]),
+    # 4 vertices, 5 edges, 3 faces. Max F = 1: at the vertex (1, 0) the
+    # bars are [0, 2) and [0, 1), and pairing them costs 1. The .bif
+    # version adds one infinite bar at push(0, 0) to both sides (cost 0).
+    ("interval scc", "4 8 10 6", "1", ["tests/interval_long.scc", "tests/interval_short.scc"]),
+    ("interval bif", "4 8 10 6", "1", ["tests/interval_long.bif", "tests/interval_short.bif"]),
     # Two origin vertices merging at (51,0) vs a single infinite bar
     # (d = 25.5). The .scc version adds unused grades at x, y in
-    # {10, 20, 30} that only cut A0; the .bif version does not.
-    ("far_merge vs A0 anchors", "10 25 37 16", ["tests/far_merge.scc", "tests/a0_anchors.scc"]),
-    ("far_merge bif", "4 10 12 6", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
+    # {10, 20, 30} that only cut A0; the .bif version does not (its second
+    # vertex and edge at (30,0) give a bar of length 0). Max F = 51/2: the
+    # infinite bars both start at push(0,0); the finite bar
+    # [max(0, t), max(0, 51 s + t)) goes to the diagonal, which costs 51/2
+    # at the vertex (1, 0) (end of the dual of (0,0)). Same in the steep strip.
+    ("far_merge vs A0 anchors", "10 25 37 16", "51/2",
+     ["tests/far_merge.scc", "tests/a0_anchors.scc"]),
+    ("far_merge bif", "4 10 12 6", "51/2", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
     # Horizontal merge at (50,0) vs vertical merge at (0,50) (d = 25).
-    ("horizontal vs vertical merge", "5 10 12 6",
+    # Max F = 25: at the vertex (0, 0), the horizontal slice y = 0, the
+    # horizontal bar has length 0 and the vertical one is [0, 50).
+    ("horizontal vs vertical merge", "5 10 12 6", "25",
      ["tests/merge_horizontal.scc", "tests/merge_vertical.scc"]),
-    # Different numbers of infinite bars (d = infinity).
-    ("unmatched infinite bars", "3 6 6 4", ["tests/free_one.scc", "tests/free_two.scc"]),
-    # Raw H_2 presentations of two prism 2-skeleta (d = infinity).
-    ("prism H_2", "7 14 20 10", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
+    # Different numbers of infinite bars (d = infinity): F is infinite
+    # on every slice.
+    ("unmatched infinite bars", "3 6 6 4", "inf", ["tests/free_one.scc", "tests/free_two.scc"]),
+    # Raw H_2 presentations of two prism 2-skeleta (d = infinity): 8 vs 9
+    # generators and no relations, so 8 vs 9 infinite bars.
+    ("prism H_2", "7 14 20 10", "inf", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
     # L of two intervals vs one spanning interval (d = 1.5). The maximum of
-    # F sits at (s, t) = (1, 1/2), on an A0 edge, not an A0 vertex.
-    ("ell vs span", "7 15 23 12", ["tests/ell.scc", "tests/span.scc"]),
+    # F sits at (s, t) = (1, 1/2), on an A0 edge, not an A0 vertex. Max F
+    # on the vertices is 1, checked at all 7 flat and 8 steep vertices; it
+    # is reached at (1, 0) in both strips (span [0,3) pairs with [1,2) at
+    # cost 1, the other L bar [2,3) goes to the diagonal at 1/2).
+    ("ell vs span", "7 15 23 12", "1", ["tests/ell.scc", "tests/span.scc"]),
 ]
 
 # small, skipped with --fast.
 SMALL_SLOW = [
-    # far_merge with 140 unused relation grades (d = 25.5).
-    ("far_merge vs 140 A0 anchors", "144 427 707 284",
+    # far_merge with 140 unused relation grades (d = 25.5). The extra
+    # relations are empty columns, so the barcodes and the argument are
+    # those of "far_merge vs A0 anchors".
+    ("far_merge vs 140 A0 anchors", "144 427 707 284", "51/2",
      ["tests/far_merge.scc", "tests/a0_anchors_medium.scc"]),
-    # Merge pair with ~140 distinct grades (d = 25).
-    ("horizontal vs vertical merge medium", "145 608 1072 468",
+    # Merge pair with ~140 distinct grades (d = 25), again only empty extra
+    # relations: same argument as "horizontal vs vertical merge".
+    ("horizontal vs vertical merge medium", "145 608 1072 468", "25",
      ["tests/merge_horizontal_medium.scc", "tests/merge_vertical_medium.scc"]),
-    # Real 10-vertex 1-skeleta, H_0 (d = 3 and 2.5).
-    ("v10 bif sample 1 vs 2", "74 1131 2338 1211", [v10(1), v10(2), "--dim", "0"]),
-    ("v10 bif sample 1 vs 5", "71 983 2032 1053", [v10(1), v10(5), "--dim", "0"]),
+    # Real 10-vertex 1-skeleta, H_0 (d = 3 and 2.5). Max F not derived by
+    # hand: recorded from play. It equals d, the largest value possible.
+    ("v10 bif sample 1 vs 2", "74 1131 2338 1211", "3", [v10(1), v10(2), "--dim", "0"]),
+    ("v10 bif sample 1 vs 5", "71 983 2032 1053", "5/2", [v10(1), v10(5), "--dim", "0"]),
 ]
 
-# medium: name, known matching distance, the two inputs. A bare name is a
+# medium: name, known matching distance d, how max F on the A0 vertices is
+# checked against d ("=" or "<="), the two inputs. A bare name is a
 # synthetic pair: tests/<name>.scc (empty dummy relation columns that only
 # add grades) without AIDA, and tests/<name>.bif with AIDA, because AIDA
 # removes the dummy columns but keeps the extra short H_0 bars of the .bif
 # 1-skeleta. Hera always reads the .bif version.
+#
+# The synthetic pairs reach d at an A0 vertex, by the arguments of the
+# matching small cases ("far_merge vs A0 anchors", "horizontal vs vertical
+# merge"); the extra short bars of the .bif versions cost at most 1/2. For
+# the v10 pairs only max F <= d is known.
 MEDIUM = [
-    ("far_merge vs 140 A0 anchors", "25.5", "far_merge", "a0_anchors_medium"),
-    ("far_merge_41 vs 140 A0 anchors", "20.5", "far_merge_41", "a0_anchors_medium"),
-    ("far_merge vs 10x10 A0 grid", "25.5", "far_merge", "a0_anchors_grid"),
-    ("horizontal vs vertical merge L=50", "25", "merge_horizontal_medium", "merge_vertical_medium"),
-    ("horizontal vs vertical merge L=40", "20", "merge_h40_medium", "merge_v40_medium"),
-    ("horizontal vs vertical merge L=60", "30", "merge_h60_medium", "merge_v60_medium"),
+    ("far_merge vs 140 A0 anchors", "25.5", "=", "far_merge", "a0_anchors_medium"),
+    ("far_merge_41 vs 140 A0 anchors", "20.5", "=", "far_merge_41", "a0_anchors_medium"),
+    ("far_merge vs 10x10 A0 grid", "25.5", "=", "far_merge", "a0_anchors_grid"),
+    ("horizontal vs vertical merge L=50", "25", "=", "merge_horizontal_medium",
+     "merge_vertical_medium"),
+    ("horizontal vs vertical merge L=40", "20", "=", "merge_h40_medium", "merge_v40_medium"),
+    ("horizontal vs vertical merge L=60", "30", "=", "merge_h60_medium", "merge_v60_medium"),
 ] + [
-    (f"v10 n50 sample {i} vs {j}", d, v10(i), v10(j))
+    (f"v10 n50 sample {i} vs {j}", d, "<=", v10(i), v10(j))
     for i, j, d in [(1, 2, "3"), (1, 5, "2.5"), (2, 8, "3"), (3, 7, "4.5"),
                     (4, 9, "6"), (7, 10, "3"), (8, 10, "3")]
 ]
@@ -205,34 +239,59 @@ def run_play(args, files, dim=None):
         cmd += ["--dim", dim]
     if not args.aida:
         cmd.append("--no-aida")
+    if args.a0_only:
+        cmd.append("--a0-only")
     return run(cmd, args.timeout)
 
 
-def a0_stats(r):
-    """(lines, vertices, edges, faces) from play's output, or None."""
+def a0_stats(r, a0_only):
+    """(lines, vertices, edges, faces, max_F, max_F_decimal) from play's
+    output, or None. max_F is exact, as play prints it ("3/2", "inf");
+    max_F_decimal is play's decimal ("1.5", "inf"). Both are "" with
+    --a0-only."""
     lines = re.search(r"^A0 lines: (\d+)", r.stdout, re.M)
     arr = re.search(r"^Arrangement has (\d+) vertices, (\d+) edges, and (\d+) faces",
                     r.stdout, re.M)
-    if r.status != "ok" or not (lines and arr):
+    max_f = re.search(r"^Max F on A0 vertices: (\S+)(?: \((\S+)\))?", r.stdout, re.M)
+    if r.status != "ok" or not (lines and arr and (max_f or a0_only)):
         return None
-    return (lines[1], *arr.groups())
+    if not max_f:
+        return (lines[1], *arr.groups(), "", "")
+    return (lines[1], *arr.groups(), max_f[1], max_f[2] or max_f[1])
+
+
+def as_number(value):
+    """A distance string ("3/2", "25.5", "inf", "infinity") as a Fraction or
+    float('inf'); None if it is not a number (error, timeout, ...)."""
+    if value.lower().lstrip("+") in ("inf", "infinity"):
+        return float("inf")
+    try:
+        return Fraction(value)
+    except ValueError:
+        return None
 
 
 def a0_fields(r, stats):
-    """The a0_lines, vertices, edges, faces columns of a results row."""
+    """The a0_lines, vertices, edges, faces, max_F, max_F_decimal columns of a
+    results row."""
     if stats:
         return list(stats)
     if r.status == "skip":
-        return ["???"] * 4
-    return ["timeout" if r.status == "timeout" else "error", "", "", ""]
+        return ["???"] * 6
+    return ["timeout" if r.status == "timeout" else "error", "", "", "", "", ""]
 
 
 def outcome(r, stats=None, lines=8):
     """One-line summary of a play run; on failure, the last lines of its output."""
     if stats:
-        return "{} lines, {} vertices, {} edges, {} faces".format(*stats) + f"  ({r.seconds}s)"
+        text = "{} lines, {} vertices, {} edges, {} faces".format(*stats[:4])
+        if stats[4]:
+            text += f", max F {stats[4]}"
+            if stats[5] != stats[4]:
+                text += f" ({stats[5]})"
+        return text + f"  ({r.seconds}s)"
     if r.status == "ok":
-        return f"FAIL no A0 counts in the output  ({r.seconds}s)"
+        return f"FAIL no A0 counts or max F in the output  ({r.seconds}s)"
     if r.status != "fail":
         return f"{r.status.upper()}  ({r.seconds}s)"
     out = "\n".join((r.stderr + r.stdout).rstrip().splitlines()[-lines:])
@@ -303,7 +362,7 @@ def benchmark(args, pairs, results, dim=None):
     pair skipped with Ctrl+N; it is not retried."""
     with_hera = dim is not None
     done = {(r[0], r[1]) for r in results.rows
-            if len(r) > 2 and r[2] and (not with_hera or (len(r) > 7 and r[7]))}
+            if len(r) > 2 and r[2] and (not with_hera or (len(r) > 9 and r[9]))}
     print(f"play: {args.play}  ({'AIDA' if args.aida else '--no-aida'})")
     if with_hera:
         print(f"hera: {args.hera or 'skipped'}")
@@ -323,9 +382,9 @@ def benchmark(args, pairs, results, dim=None):
             r = run_play(args, [a, b], dim)
         except KeyboardInterrupt:
             if args.hera and with_hera:   # keep Hera's result; play is redone on resume
-                results.append([a.name, b.name, "", "", "", "", "", *hera])
+                results.append([a.name, b.name, "", "", "", "", "", "", "", *hera])
             raise
-        stats = a0_stats(r)
+        stats = a0_stats(r, args.a0_only)
         print("  A0: " + outcome(r, stats))
         results.append([a.name, b.name, *a0_fields(r, stats), r.seconds, *hera])
     print(f"Done. Results: {results.path}")
@@ -337,13 +396,15 @@ def benchmark(args, pairs, results, dim=None):
 def cmd_small(args):
     cases = SMALL + ([] if args.fast else SMALL_SLOW)
     print(f"play: {args.play}  (--no-aida, timeout {args.timeout:g}s)")
-    print("columns: A0 lines, vertices, edges, faces\n")
+    print("columns: A0 lines, vertices, edges, faces" +
+          ("" if args.a0_only else ", max F on A0 vertices") + "\n")
     failed = 0
-    for name, expected, play_args in cases:
+    for name, expected_a0, expected_f, play_args in cases:
+        expected = expected_a0 if args.a0_only else f"{expected_a0} {expected_f}"
         print(f"{name:<42}", end="", flush=True)
         r = run_play(args, play_args)
-        stats = a0_stats(r)
-        got = " ".join(stats) if stats else ""
+        stats = a0_stats(r, args.a0_only)
+        got = " ".join(x for x in stats[:5] if x) if stats else ""
         if got == expected:
             print(f"ok  {got}  ({r.seconds}s)")
             continue
@@ -366,10 +427,11 @@ def cmd_medium(args):
         print(f"hera: {args.hera}  (reference only, timeout {args.hera_timeout:g}s)\n")
     else:
         print("hera: skipped\n")
-    table = ["name\tknown_dist\ta0_lines\tvertices\tedges\tfaces\tseconds\tstatus\thera\thera_seconds"]
+    table = ["name\tknown_dist\ta0_lines\tvertices\tedges\tfaces\tmax_F\tmax_F_decimal"
+             "\tseconds\tstatus\thera\thera_seconds"]
     failed = 0
     try:
-        for name, known, a, b in MEDIUM:
+        for name, known, check, a, b in MEDIUM:
             print(f"{name:<40}", end="", flush=True)
             hera, hera_sec = "skip", ""
             hera_a, hera_b = path(a, "bif"), path(b, "bif")
@@ -377,26 +439,41 @@ def cmd_medium(args):
                 hera, hera_sec = run_hera(args, hera_a, hera_b, "0")
             ext = "bif" if args.aida else "scc"
             r = run_play(args, [path(a, ext), path(b, ext)], "0")
-            stats = a0_stats(r)
+            stats = a0_stats(r, args.a0_only)
             ref = f"known {known}" + (f", hera {hera} ({hera_sec}s)" if hera != "skip" else "")
-            if stats:
-                print(f"ok  {stats[0]} lines, {stats[1]} vertices  ({r.seconds}s)  {ref}")
-                status = "ok"
+            if stats and not args.a0_only:
+                f, d = as_number(stats[4]), Fraction(known)
+                if f == d if check == "=" else f <= d:
+                    status = "ok"
+                else:
+                    status = f"max F not {check} known"
             else:
-                failed += 1
-                status = r.status
+                status = "ok" if stats else r.status
+            if stats:
+                summary = f"{stats[0]} lines, {stats[1]} vertices"
+                if not args.a0_only:
+                    summary += f", max F {stats[4]} ({check} {known})"
+                print(f"{'ok  ' if status == 'ok' else 'FAIL '}{summary}  ({r.seconds}s)  {ref}")
+            else:
                 print(f"{ref}\n{outcome(r)}")
-            table.append("\t".join([name, known, *(stats or [""] * 4), r.seconds, status,
+            if status != "ok":
+                failed += 1
+            table.append("\t".join([name, known, *(stats or [""] * 6), r.seconds, status,
                                     hera, hera_sec]))
     finally:
         print("\n" + "\n".join(table))
-    print(f"\nAll {len(MEDIUM)} medium cases built A0." if not failed
+    print(f"\nAll {len(MEDIUM)} medium cases passed." if not failed
           else f"\n{len(MEDIUM) - failed} passed, {failed} failed.")
     return 1 if failed else 0
 
 
-HERA_COLUMNS = ["file_a", "file_b", "a0_lines", "vertices", "edges", "faces", "seconds",
-                "hera_distance", "hera_seconds"]
+HERA_COLUMNS = ["file_a", "file_b", "a0_lines", "vertices", "edges", "faces", "max_F",
+                "max_F_decimal", "seconds", "hera_distance", "hera_seconds"]
+
+
+def evaluated(args):
+    """Settings value: whether the max_F column is filled."""
+    return "skipped (--a0-only)" if args.a0_only else "on A0 vertices"
 
 
 def cmd_finite(args):
@@ -407,7 +484,7 @@ def cmd_finite(args):
     mode = "aida" if args.aida else "noaida"
     results = Results(args.results or ROOT / f"tests/finite_results_a0_{mode}.txt",
                       "A0 benchmark: the 18 finite pairs of tests/results.txt",
-                      {"dim": args.dim, "preprocess": mode},
+                      {"dim": args.dim, "preprocess": mode, "max_F": evaluated(args)},
                       {"play": args.play, "hera": args.hera or "skipped"},
                       HERA_COLUMNS, args.fresh)
     return benchmark(args, pairs, results, dim=args.dim)
@@ -421,7 +498,7 @@ def cmd_random(args):
     mode = "aida" if args.aida else "noaida"
     results = Results(args.results or ROOT / "tests/results_a0.txt",
                       "A0 benchmark: all pairs of tests/random_bifiltrations",
-                      {"dim": args.dim, "preprocess": mode},
+                      {"dim": args.dim, "preprocess": mode, "max_F": evaluated(args)},
                       {"play": args.play, "hera": args.hera or "skipped",
                        "files": len(files), "pairs": len(pairs)},
                       HERA_COLUMNS, args.fresh)
@@ -482,9 +559,10 @@ def cmd_kerber(args):
     results = Results(args.results or ROOT / "tests/small_instance_results_a0.txt",
                       "A0 benchmark: data_benchmarks/small_instances, same suffix",
                       {"max_grades": args.max_grades,
-                       "preprocess": "aida" if args.aida else "noaida"},
+                       "preprocess": "aida" if args.aida else "noaida",
+                       "max_F": evaluated(args)},
                       {"play": args.play, "files": len(files), "pairs": len(pairs)},
-                      HERA_COLUMNS[:7], args.fresh)
+                      HERA_COLUMNS[:9], args.fresh)
     return benchmark(args, pairs, results)
 
 
@@ -504,6 +582,8 @@ def parse_args():
                        help="play binary (default: $PLAY_BIN or build/play)")
         s.add_argument("--timeout", type=float, default=timeout, metavar="S",
                        help=f"seconds per play run (default: {timeout or 'none'})")
+        s.add_argument("--a0-only", action="store_true",
+                       help="only build A0; do not evaluate F (play --a0-only)")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()
@@ -528,7 +608,8 @@ def parse_args():
                            help=f"seconds per Hera run (default: {hera_timeout or 'none'})")
         return s
 
-    small = add("small", cmd_small, "exact A0 counts for small pairs (always --no-aida)",
+    small = add("small", cmd_small,
+                "exact A0 counts and max F for small pairs (always --no-aida)",
                 timeout=30)
     small.add_argument("--fast", action="store_true", help="skip the ~140-line cases")
     add("medium", cmd_medium, "larger pairs with known distances", timeout=60, aida=False,
