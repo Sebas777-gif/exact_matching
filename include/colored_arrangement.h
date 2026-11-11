@@ -20,6 +20,9 @@ namespace matching {
 
 enum class Color { red, yellow, green };
 
+// Vertex data: an upper bound on F at the vertex, exact where F was
+// evaluated; empty until the vertex is first needed. Halfedge data: unused.
+// Face data: the color.
 typedef CGAL::Arr_extended_dcel<Traits_2, std::optional<FT>, bool, Color> Colored_dcel;
 typedef CGAL::Arrangement_2<Traits_2, Colored_dcel> Colored_arrangement;
 
@@ -104,6 +107,26 @@ inline std::size_t build_initial_quadrilateral(Colored_arrangement& arr,
   return red;
 }
 
+// A slice (s, t) where F was evaluated before the insertion.
+struct Sample {
+  Point_2 point;
+  FT F;
+};
+
+// The smallest upper bound on F at q that the samples give:
+//   F(q) <= F(p) + 2 (X |s_q - s_p| + |t_q - t_p|)   for every sample p,
+// the same bound as in face_upper_bound. Empty if there are no samples.
+inline std::optional<FT> sample_bound(const std::vector<Sample>& samples, const FT& max_x,
+                                      const Point_2& q) {
+  std::optional<FT> best;
+  for (const Sample& p : samples) {
+    const FT bound = p.F + 2 * (max_x * CGAL::abs(q.x() - p.point.x())
+                                + CGAL::abs(q.y() - p.point.y()));
+    if (!best || bound < *best) best = bound;
+  }
+  return best;
+}
+
 // Watches a Colored_arrangement while segments are inserted and reacts to
 // every face split. CGAL calls these functions from inside CGAL::insert.
 //
@@ -127,10 +150,17 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   std::vector<Halfedge_handle> green_edges;
   // Number of F evaluations done by the callbacks.
   std::size_t evaluations = 0;
+  // Number of vertices that got a sample bound instead of an evaluation.
+  std::size_t skipped = 0;
 
-  Coloring_observer(Colored_arrangement& arr, const Module& M, const Module& N, FT& delta)
+  // With samples, a new vertex whose sample bound is at most delta is not
+  // evaluated: F <= delta there, so it cannot raise delta. The bound is
+  // stored instead, which is all face_upper_bound needs. samples must
+  // outlive the observer.
+  Coloring_observer(Colored_arrangement& arr, const Module& M, const Module& N, FT& delta,
+                    const std::vector<Sample>* samples = nullptr)
       : CGAL::Arr_observer<Colored_arrangement>(arr), M_(M), N_(N), delta_(delta),
-        max_x_(max_abs_x(M, N)) {}
+        max_x_(max_abs_x(M, N)), samples_(samples) {}
 
   // X of the face bound for this strip (see max_abs_x).
   const FT& max_x() const { return max_x_; }
@@ -141,19 +171,13 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   void before_split_face(Face_handle f, Halfedge_handle e) override {
     assert(f->data() != Color::yellow); // the queue is cleared after every insertion
     if (f->data() == Color::red) {
-      Point_2 p = e->source()->point();
-      Point_2 q = e->target()->point();
-      if (!e->source()->data()) {
-        e->source()->set_data(F(M_, N_, p.x(), p.y()));  // F(p)
-        ++evaluations;
-      }
-      if (!e->target()->data()) {
-        e->target()->set_data(F(M_, N_, q.x(), q.y()));  // F(q)
-        ++evaluations;
-      }
+      set_value(e->source());
+      set_value(e->target());
       std::optional<FT> Fp = e->source()->data();
       std::optional<FT> Fq = e->target()->data();
       assert(Fp && Fq); // F is finite everywhere or nowhere; checked before inserting
+      // A stored sample bound is at most delta_, so only evaluated values can
+      // raise it.
       delta_ = std::max({*Fp, *Fq, delta_});
     }
     if (f->data() == Color::green)
@@ -178,10 +202,27 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   }
 
  private:
+  // Gives v its value, unless it has one: the sample bound if that is at
+  // most delta_ (covered by a sample), otherwise F itself.
+  void set_value(Colored_arrangement::Vertex_handle v) {
+    if (v->data()) return;
+    if (samples_) {
+      const std::optional<FT> bound = sample_bound(*samples_, max_x_, v->point());
+      if (bound && *bound <= delta_) {
+        v->set_data(bound);
+        ++skipped;
+        return;
+      }
+    }
+    v->set_data(F(M_, N_, v->point().x(), v->point().y()));
+    ++evaluations;
+  }
+
   const Module& M_;
   const Module& N_;
   FT& delta_;  // the largest F found so far, shared by both strips
   FT max_x_;   // the largest |v_x| over all grades v of M_ and N_, fixed per strip
+  const std::vector<Sample>* samples_;  // samples of this strip, or nullptr
 };
 
 inline FT face_upper_bound(Colored_arrangement::Face_handle f, const FT& max_x) {
@@ -273,6 +314,7 @@ struct StripStats {
   std::size_t segments = 0;     // dual segments inserted
   std::size_t samples = 0;      // F evaluations of the sampling pass
   std::size_t evaluations = 0;  // F evaluations during the insertion, quadrilateral corners included
+  std::size_t skipped = 0;      // vertices covered by a sample, not evaluated
   // The final arrangement, outer face included.
   std::size_t vertices = 0, edges = 0, faces = 0, red_faces = 0;
 };
@@ -298,12 +340,12 @@ inline Point_2 random_a0_vertex(const std::vector<Grade2>& grades, std::mt19937&
   return Point_2(FT(1), a.y - a.x);
 }
 
-// Evaluates F at k random A0 vertices of the strip of (M, N) and raises
-// delta. Returns false, after the first sample, if F is infinite there:
+// Evaluates F at k random A0 vertices of the strip of (M, N), raises delta,
+// and appends them to samples. Returns false, after the first sample, if F is infinite there:
 // F is infinite on every slice or on none. A sampled vertex is evaluated
 // again if the insertion reaches it later.
 inline bool sample_delta(const Module& M, const Module& N, std::size_t k, std::mt19937& rng,
-                         FT& delta, StripStats& stats) {
+                         FT& delta, std::vector<Sample>& samples, StripStats& stats) {
   std::set<Grade2> grade_set;
   collect_grades(M, N, grade_set);
   if (grade_set.empty()) return true;
@@ -314,20 +356,23 @@ inline bool sample_delta(const Module& M, const Module& N, std::size_t k, std::m
     ++stats.samples;
     if (!f) return false;
     delta = std::max(delta, *f);
+    samples.push_back(Sample{p, *f});
   }
   return true;
 }
 
 // Inserts the dual segments of the strip of (M, N) in random order into the
-// initial quadrilateral, with red/green coloring, and raises delta.
+// initial quadrilateral, with red/green coloring, and raises delta. With
+// samples, vertices covered by a sample are not evaluated (see
+// Coloring_observer).
 inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT& delta,
-                         StripStats& stats) {
+                         StripStats& stats, const std::vector<Sample>* samples = nullptr) {
   Colored_arrangement arr;
   build_initial_quadrilateral(arr, M, N, delta);
   stats.evaluations = arr.number_of_vertices();  // the corners
 
   // Declared after arr, so it is destroyed (and detached) before arr.
-  Coloring_observer obs(arr, M, N, delta);
+  Coloring_observer obs(arr, M, N, delta, samples);
 
   std::set<Grade2> grades;
   collect_grades(M, N, grades);
@@ -338,6 +383,7 @@ inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT
 
   stats.segments = segments.size();
   stats.evaluations += obs.evaluations;
+  stats.skipped = obs.skipped;
   stats.vertices = arr.number_of_vertices();
   stats.edges = arr.number_of_edges();
   stats.faces = arr.number_of_faces();
@@ -350,19 +396,23 @@ inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT
 // different numbers of infinite bars. First evaluates F at `samples` random
 // A0 vertices (half per strip, at least one) for a good starting Delta,
 // then inserts the segments of the flat and then the steep strip. Delta is
-// shared by both. The result equals max_F_on_vertices over both strips.
+// shared by both. With skip_covered, vertices covered by a sample are not
+// evaluated. The result equals max_F_on_vertices over both strips.
 inline std::optional<FT> incremental_max_F(const Module& M, const Module& N,
                                            std::size_t samples, unsigned seed,
-                                           StripStats& flat, StripStats& steep) {
+                                           StripStats& flat, StripStats& steep,
+                                           bool skip_covered = true) {
   const Module M_swap = swapped_module(M), N_swap = swapped_module(N);
   std::mt19937 rng(seed);
   FT delta(0);
   // The first sample also decides whether F is infinite (everywhere).
-  if (!sample_delta(M, N, std::max<std::size_t>(1, (samples + 1) / 2), rng, delta, flat))
+  std::vector<Sample> flat_samples, steep_samples;
+  if (!sample_delta(M, N, std::max<std::size_t>(1, (samples + 1) / 2), rng, delta,
+                    flat_samples, flat))
     return std::nullopt;
-  sample_delta(M_swap, N_swap, samples / 2, rng, delta, steep);
-  insert_strip(M, N, rng, delta, flat);
-  insert_strip(M_swap, N_swap, rng, delta, steep);
+  sample_delta(M_swap, N_swap, samples / 2, rng, delta, steep_samples, steep);
+  insert_strip(M, N, rng, delta, flat, skip_covered ? &flat_samples : nullptr);
+  insert_strip(M_swap, N_swap, rng, delta, steep, skip_covered ? &steep_samples : nullptr);
   return delta;
 }
 

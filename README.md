@@ -153,6 +153,7 @@ Two files, one module each:
 | `--incremental` | Compute max $F$ on the $A_0$ vertices with the red/green insertion (`include/colored_arrangement.h`) instead of evaluating every vertex. The result is the same; the number of $F$ evaluations is usually smaller. |
 | `--samples k` | With `--incremental`: evaluate $F$ at $k$ random $A_0$ vertices first, half per strip, at least one (default 50). |
 | `--seed n` | With `--incremental`: seed of the sampling and of the insertion order (default 1). |
+| `--no-skip` | With `--incremental`: also evaluate $F$ at vertices that a sample already covers. By default such a vertex gets the sample's bound $F(p) + 2(X\lvert s - s_p\rvert + \lvert t - t_p\rvert)$ instead, when that is at most Delta. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.

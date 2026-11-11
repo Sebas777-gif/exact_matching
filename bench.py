@@ -245,6 +245,8 @@ def run_play(args, files, dim=None):
         cmd.append("--a0-only")
     elif args.incremental:
         cmd += ["--incremental", "--samples", str(args.samples), "--seed", str(args.seed)]
+        if args.no_skip:
+            cmd.append("--no-skip")
     return run(cmd, args.timeout)
 
 
@@ -491,7 +493,8 @@ def method(args):
     if args.a0_only:
         return "A0 only (--a0-only)"
     if args.incremental:
-        return f"incremental, {args.samples} samples, seed {args.seed}"
+        skip = "no skipping" if args.no_skip else "skipping covered vertices"
+        return f"incremental, {args.samples} samples, seed {args.seed}, {skip}"
     return "all A0 vertices"
 
 
@@ -609,6 +612,8 @@ def parse_args():
                        help="with --incremental: random A0 vertices evaluated first (default: 50)")
         s.add_argument("--seed", type=int, default=1, metavar="N",
                        help="with --incremental: random seed (default: 1)")
+        s.add_argument("--no-skip", action="store_true",
+                       help="with --incremental: evaluate vertices covered by a sample too")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()
