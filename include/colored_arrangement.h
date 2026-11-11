@@ -87,14 +87,13 @@ inline std::size_t build_initial_quadrilateral(Colored_arrangement& arr,
   CGAL::insert(arr, sides.begin(), sides.end());
 
   std::size_t red = 0;
-  for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f) {
-    if (f->is_unbounded()) {
+  for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f)
+    if (f->is_unbounded())
       f->set_data(Color::green);
-    } else {
+    else {
       f->set_data(Color::red);
       ++red;
     }
-  }
   for (auto v = arr.vertices_begin(); v != arr.vertices_end(); ++v) {
     std::optional<FT> Fv = F(M, N, v->point().x(), v->point().y());
     v->set_data(Fv);
@@ -222,7 +221,7 @@ inline FT face_upper_bound(Colored_arrangement::Face_handle f, const FT& max_x) 
 // Inserts one segment, then restores the invariant: no yellow faces, and
 // no edge with green on both sides.
 inline void insert_segment(Colored_arrangement& arr, Coloring_observer& obs,
-                           const Segment_2& seg, const FT& delta /* ... */) {
+                           const Segment_2& seg, const FT& delta) {
   CGAL::insert(arr, X_monotone_curve_2(seg));   // the callbacks fill obs.yellow and obs.green_edges
 
   // Step 1: classify every yellow face as red or green (face_upper_bound vs delta).
