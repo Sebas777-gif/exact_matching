@@ -154,6 +154,7 @@ Two files, one module each:
 | `--samples k` | With `--incremental`: evaluate $F$ at $k$ random $A_0$ vertices first, half per strip, at least one (default 50). |
 | `--seed n` | With `--incremental`: seed of the sampling and of the insertion order (default 1). |
 | `--no-skip` | With `--incremental`: also evaluate $F$ at vertices that a sample already covers. By default such a vertex gets the sample's bound $F(p) + 2(X\lvert s - s_p\rvert + \lvert t - t_p\rvert)$ instead, when that is at most Delta. |
+| `--bound b` | With `--incremental`: the face bound that decides whether a face turns green. `variation` (default): $F(c) + V_M(c) + V_N(c)$ with the exact push change of every grade between the corners, computed in interval arithmetic. `lipschitz`: $F(c) + 2\max_i(X\lvert s_i - s_c\rvert + \lvert t_i - t_c\rvert)$ with one constant $X$. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.

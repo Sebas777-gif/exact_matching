@@ -11,6 +11,9 @@
 
 #include <CGAL/Arr_extended_dcel.h>
 #include <CGAL/Arr_observer.h>
+#include <CGAL/Interval_nt.h>
+
+#include <limits>
 
 #include <random>
 
@@ -107,6 +110,41 @@ inline std::size_t build_initial_quadrilateral(Colored_arrangement& arr,
   return red;
 }
 
+// Which upper bound on F decides whether a face turns green.
+//   lipschitz  F(c) + 2 max_i (X |s_i - s_c| + |t_i - t_c|), with one X for
+//              all grades (face_upper_bound_lipschitz)
+//   variation  F(c) + V_M(c) + V_N(c), with the exact push change of every
+//              grade between the corners (face_upper_bound_variation)
+enum class FaceBound { lipschitz, variation };
+
+// The distinct grades of one module (generators and relations of all
+// summands).
+inline std::vector<Grade2> module_grades(const Module& M) {
+  std::set<Grade2> grades;
+  for (const Presentation& P : M.summands) {
+    grades.insert(P.generators.begin(), P.generators.end());
+    grades.insert(P.relations.begin(), P.relations.end());
+  }
+  return std::vector<Grade2>(grades.begin(), grades.end());
+}
+
+// Grades in interval arithmetic for the variation bound (see
+// face_upper_bound_variation).
+typedef CGAL::Interval_nt<true> Interval;
+
+// A grade with interval coordinates, converted once per strip.
+struct IntervalGrade {
+  Interval x, y;
+};
+
+inline std::vector<IntervalGrade> interval_grades(const std::vector<Grade2>& grades) {
+  std::vector<IntervalGrade> out;
+  out.reserve(grades.size());
+  for (const Grade2& v : grades)
+    out.push_back(IntervalGrade{Interval(CGAL::to_interval(v.x)), Interval(CGAL::to_interval(v.y))});
+  return out;
+}
+
 // A slice (s, t) where F was evaluated before the insertion.
 struct Sample {
   Point_2 point;
@@ -157,13 +195,21 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   // evaluated: F <= delta there, so it cannot raise delta. The bound is
   // stored instead, which is all face_upper_bound needs. samples must
   // outlive the observer.
+  // bound selects the face bound that insert_segment uses.
   Coloring_observer(Colored_arrangement& arr, const Module& M, const Module& N, FT& delta,
-                    const std::vector<Sample>* samples = nullptr)
+                    const std::vector<Sample>* samples = nullptr,
+                    FaceBound bound = FaceBound::variation)
       : CGAL::Arr_observer<Colored_arrangement>(arr), M_(M), N_(N), delta_(delta),
-        max_x_(max_abs_x(M, N)), samples_(samples) {}
+        max_x_(max_abs_x(M, N)), samples_(samples), bound_(bound),
+        grades_M_(interval_grades(module_grades(M))),
+        grades_N_(interval_grades(module_grades(N))) {}
 
-  // X of the face bound for this strip (see max_abs_x).
+  // X of the Lipschitz bound for this strip (see max_abs_x).
   const FT& max_x() const { return max_x_; }
+  FaceBound bound() const { return bound_; }
+  // The distinct grades of each module, as intervals, for the variation bound.
+  const std::vector<IntervalGrade>& interval_grades_M() const { return grades_M_; }
+  const std::vector<IntervalGrade>& interval_grades_N() const { return grades_N_; }
 
   // Called before face f is split by the new edge e. f still has its color.
   // e->source()->point() and e->target()->point() are the two points (s, t)
@@ -223,9 +269,11 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   FT& delta_;  // the largest F found so far, shared by both strips
   FT max_x_;   // the largest |v_x| over all grades v of M_ and N_, fixed per strip
   const std::vector<Sample>* samples_;  // samples of this strip, or nullptr
+  FaceBound bound_;
+  std::vector<IntervalGrade> grades_M_, grades_N_;
 };
 
-inline FT face_upper_bound(Colored_arrangement::Face_handle f, const FT& max_x) {
+inline FT face_upper_bound_lipschitz(Colored_arrangement::Face_handle f, const FT& max_x) {
   // All corners of a bounded face f, in counterclockwise order.
   std::vector<Colored_arrangement::Vertex_handle> corners;
   auto he = f->outer_ccb();     // circulator over the halfedges around f
@@ -269,6 +317,109 @@ inline FT face_upper_bound(Colored_arrangement::Face_handle f, const FT& max_x) 
   return *min_bound;
 }
 
+// Upper bound on F over the face f, from the push changes of the grades
+// between the corners of f.
+//
+// For a corner c of f whose F is known (exact or an upper bound) and any
+// slice p in f, let d_v(p) = push_v(p) - push_v(c). By stability, applied to
+// each module separately,
+//
+//   F(p) <= F(c) + max_{v in M} |d_v(p)| + max_{v in N} |d_v(p)|.
+//
+// push_v = max(v_y, s v_x + t) takes its largest and its smallest value over
+// the convex face f at corners: the largest because it is convex; the
+// smallest because it is v_y (its global minimum) on the half-plane
+// s v_x + t <= v_y, which contains a corner of f if it meets f at all, and
+// otherwise push_v is linear on f. So with corners c_i,
+//
+//   V_M(c) = max_{v in M} max(max_i push_v(c_i) - push_v(c), push_v(c) - min_i push_v(c_i))
+//
+// bounds the first maximum on all of f, likewise V_N(c), and
+//
+//   sup_f F <= min over corners c of F(c) + V_M(c) + V_N(c).
+//
+// A grade that lies above every slice in f (push = v_y throughout)
+// contributes nothing, which is where this beats the Lipschitz bound.
+//
+// The bound only has to be an upper bound, not exact, so it is computed in
+// interval arithmetic (doubles rounded outward) instead of exact FT, which
+// is much faster. The result is the upper end: a valid upper bound on F.
+inline double face_upper_bound_variation(Colored_arrangement::Face_handle f,
+                                         const std::vector<IntervalGrade>& grades_M,
+                                         const std::vector<IntervalGrade>& grades_N) {
+  std::vector<Colored_arrangement::Vertex_handle> corners;
+  auto he = f->outer_ccb();
+  auto first = he;
+  do {
+    corners.push_back(he->target());
+  } while (++he != first);
+  const std::size_t k = corners.size();
+  std::vector<Interval> s(k), t(k);
+  for (std::size_t i = 0; i < k; i++) {
+    s[i] = Interval(CGAL::to_interval(corners[i]->point().x()));
+    t[i] = Interval(CGAL::to_interval(corners[i]->point().y()));
+  }
+
+  // For one module: the push of every grade at every corner, and per grade
+  // an upper bound on its largest and a lower bound on its smallest push
+  // over the corners. max is monotone, so the ends of max(a, b) are the
+  // maxima of the ends.
+  struct Pushes {
+    std::vector<std::vector<Interval> > at;  // at[i][v]: push of grade v at corner i
+    std::vector<double> hi, lo;              // per grade: >= max and <= min over the corners
+  };
+  auto pushes = [&](const std::vector<IntervalGrade>& grades) {
+    Pushes P;
+    P.at.assign(k, std::vector<Interval>(grades.size()));
+    for (std::size_t i = 0; i < k; i++)
+      for (std::size_t v = 0; v < grades.size(); v++) {
+        const Interval line = s[i] * grades[v].x + t[i];
+        P.at[i][v] = Interval(std::max(grades[v].y.inf(), line.inf()),
+                              std::max(grades[v].y.sup(), line.sup()));
+      }
+    P.hi.assign(grades.size(), -std::numeric_limits<double>::infinity());
+    P.lo.assign(grades.size(), std::numeric_limits<double>::infinity());
+    for (std::size_t i = 0; i < k; i++)
+      for (std::size_t v = 0; v < grades.size(); v++) {
+        P.hi[v] = std::max(P.hi[v], P.at[i][v].sup());
+        P.lo[v] = std::min(P.lo[v], P.at[i][v].inf());
+      }
+    return P;
+  };
+  // Upper bound on V(c): the largest change of any grade's push between
+  // corner c and the rest of f.
+  auto variation = [](const Pushes& P, std::size_t c) {
+    double V = 0;
+    for (std::size_t v = 0; v < P.hi.size(); v++) {
+      V = std::max(V, (Interval(P.hi[v]) - P.at[c][v]).sup());
+      V = std::max(V, (P.at[c][v] - Interval(P.lo[v])).sup());
+    }
+    return V;
+  };
+
+  const Pushes PM = pushes(grades_M), PN = pushes(grades_N);
+  double min_bound = std::numeric_limits<double>::infinity();
+  for (std::size_t c = 0; c < k; c++) {
+    assert(corners[c]->data());  // every corner of a red or yellow face has a value
+    const Interval bound = Interval(CGAL::to_interval(*corners[c]->data()))
+        + Interval(variation(PM, c)) + Interval(variation(PN, c));
+    min_bound = std::min(min_bound, bound.sup());
+  }
+  return min_bound;
+}
+
+// Whether F <= delta is guaranteed on all of f, with the bound selected in
+// the observer. The variation bound is an interval upper end, so it is
+// compared with the lower end of delta: rounding can only make a face stay
+// red, never wrongly turn green.
+inline bool face_is_green(Colored_arrangement::Face_handle f, const Coloring_observer& obs,
+                          const FT& delta) {
+  if (obs.bound() == FaceBound::lipschitz)
+    return face_upper_bound_lipschitz(f, obs.max_x()) <= delta;
+  return face_upper_bound_variation(f, obs.interval_grades_M(), obs.interval_grades_N())
+      <= CGAL::to_interval(delta).first;
+}
+
 // Inserts one segment, then restores the invariant: no yellow faces, and
 // no edge with green on both sides.
 inline void insert_segment(Colored_arrangement& arr, Coloring_observer& obs,
@@ -278,7 +429,7 @@ inline void insert_segment(Colored_arrangement& arr, Coloring_observer& obs,
   // Step 1: classify every yellow face as red or green (face_upper_bound vs delta).
   std::vector<Colored_arrangement::Face_handle> new_green_faces;
   for (Colored_arrangement::Face_handle f : obs.yellow)
-    if (face_upper_bound(f, obs.max_x()) <= delta) {
+    if (face_is_green(f, obs, delta)) {
       f->set_data(Color::green);
       new_green_faces.push_back(f);
     }
@@ -366,13 +517,14 @@ inline bool sample_delta(const Module& M, const Module& N, std::size_t k, std::m
 // samples, vertices covered by a sample are not evaluated (see
 // Coloring_observer).
 inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT& delta,
-                         StripStats& stats, const std::vector<Sample>* samples = nullptr) {
+                         StripStats& stats, const std::vector<Sample>* samples = nullptr,
+                         FaceBound bound = FaceBound::variation) {
   Colored_arrangement arr;
   build_initial_quadrilateral(arr, M, N, delta);
   stats.evaluations = arr.number_of_vertices();  // the corners
 
   // Declared after arr, so it is destroyed (and detached) before arr.
-  Coloring_observer obs(arr, M, N, delta, samples);
+  Coloring_observer obs(arr, M, N, delta, samples, bound);
 
   std::set<Grade2> grades;
   collect_grades(M, N, grades);
@@ -401,7 +553,8 @@ inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT
 inline std::optional<FT> incremental_max_F(const Module& M, const Module& N,
                                            std::size_t samples, unsigned seed,
                                            StripStats& flat, StripStats& steep,
-                                           bool skip_covered = true) {
+                                           bool skip_covered = true,
+                                           FaceBound bound = FaceBound::variation) {
   const Module M_swap = swapped_module(M), N_swap = swapped_module(N);
   std::mt19937 rng(seed);
   FT delta(0);
@@ -411,8 +564,8 @@ inline std::optional<FT> incremental_max_F(const Module& M, const Module& N,
                     flat_samples, flat))
     return std::nullopt;
   sample_delta(M_swap, N_swap, samples / 2, rng, delta, steep_samples, steep);
-  insert_strip(M, N, rng, delta, flat, skip_covered ? &flat_samples : nullptr);
-  insert_strip(M_swap, N_swap, rng, delta, steep, skip_covered ? &steep_samples : nullptr);
+  insert_strip(M, N, rng, delta, flat, skip_covered ? &flat_samples : nullptr, bound);
+  insert_strip(M_swap, N_swap, rng, delta, steep, skip_covered ? &steep_samples : nullptr, bound);
   return delta;
 }
 

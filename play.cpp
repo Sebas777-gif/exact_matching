@@ -13,7 +13,8 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " file1 file2 [--dim d] [--no-aida] [--a0-only]"
-              << " [--incremental [--samples k] [--seed n] [--no-skip]]"
+              << " [--incremental [--samples k] [--seed n] [--no-skip]"
+              << " [--bound lipschitz|variation]]"
               << " (each file .scc, .scc_k, .minpres_k, .sccsum, or .bif)"
               << std::endl;
     std::exit(1);
@@ -24,6 +25,7 @@ int main(int argc, char** argv) {
   bool evaluate = true;
   bool incremental = false;
   bool skip_covered = true;
+  matching::FaceBound bound = matching::FaceBound::variation;
   long samples = 50;
   long seed = 1;
   int homology_dim = 0;
@@ -38,6 +40,16 @@ int main(int argc, char** argv) {
       incremental = true;
     } else if (arg == "--no-skip") {
       skip_covered = false;
+    } else if (arg == "--bound") {
+      const std::string kind = i + 1 < argc ? argv[++i] : "";
+      if (kind == "lipschitz") {
+        bound = matching::FaceBound::lipschitz;
+      } else if (kind == "variation") {
+        bound = matching::FaceBound::variation;
+      } else {
+        std::cerr << "--bound needs lipschitz or variation" << std::endl;
+        std::exit(1);
+      }
     } else if (arg == "--samples" || arg == "--seed") {
       if (i + 1 >= argc) {
         std::cerr << arg << " needs an integer" << std::endl;
@@ -121,7 +133,7 @@ int main(int argc, char** argv) {
   if (incremental) {
     matching::StripStats flat_stats, steep_stats;
     const std::optional<matching::FT> result = matching::incremental_max_F(
-        modules[0], modules[1], samples, seed, flat_stats, steep_stats, skip_covered);
+        modules[0], modules[1], samples, seed, flat_stats, steep_stats, skip_covered, bound);
     auto strip = [](const char* name, const matching::StripStats& st) {
       std::cout << name << st.samples << " samples, " << st.evaluations << " evaluations, "
                 << st.skipped << " skipped, " << st.segments << " segments; final " << st.vertices << " vertices, "
@@ -129,7 +141,9 @@ int main(int argc, char** argv) {
                 << " red)" << std::endl;
     };
     std::cout << "Incremental: " << std::max(1L, samples) << " samples, seed " << seed
-              << (skip_covered ? ", skipping covered vertices" : "") << std::endl;
+              << (skip_covered ? ", skipping covered vertices" : "")
+              << (bound == matching::FaceBound::lipschitz ? ", Lipschitz bound" : ", variation bound")
+              << std::endl;
     if (result) {
       strip("Flat strip:  ", flat_stats);
       strip("Steep strip: ", steep_stats);
