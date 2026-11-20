@@ -200,14 +200,15 @@ See `tests/README.md`.
 | `./bench.py medium` | Larger pairs with known distances $d$, `--no-aida` by default, `--aida` for mpfree+AIDA. Checks max $F = d$ (synthetic pairs) or max $F \le d$, and with `--distance` that the distance equals $d$; exit 1 otherwise. Prints Hera's value as a reference (`--no-hera` skips Hera) |
 | `./bench.py finite` | The 18 finite pairs of the old `tests/results.txt`, AIDA by default |
 | `./bench.py kerber` | Feasible pairs of Kerber's `data_benchmarks/small_instances` |
+| `./bench.py kerber-extended` | Pairs of repeats (instance numbers 1–5) of the same construction in `data_benchmarks/instances`, up to 400 bigrades per file: 131 pairs |
 | `./bench.py random` | Every pair of `tests/random_bifiltrations` |
 
 `--a0-only` (every set) skips $F$; `--incremental` (with `--samples`,
 `--seed`, `--bound`) uses the red/green insertion, which must give the same
 max $F$; `--distance` (with `--max-candidates`) adds the local phase.
-`./bench.py SET --help` lists the options of a set. `finite`, `kerber`, and
-`random` append one row per pair to a `*_a0.txt` file under `tests/` and
-resume where they stopped. They leave the old distance logs (`results.txt`,
+`./bench.py SET --help` lists the options of a set. `finite`, `kerber`,
+`kerber-extended`, and `random` append one row per pair to a results file
+under `tests/` and resume where they stopped. They leave the old distance logs (`results.txt`,
 `finite_results_new.txt`, `small_instance_results*.txt`,
 `refined_results.txt`) alone. In every set, Ctrl+N skips the running pair
 and Ctrl+C stops.

@@ -77,5 +77,6 @@ tests/small_instance_results.txt
 tests/results_a0.txt
 tests/finite_results_a0_*.txt
 tests/small_instance_results_a0.txt
+tests/kerber_extended_results.txt
 data_benchmarks/
 

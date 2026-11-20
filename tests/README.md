@@ -262,6 +262,7 @@ a reference. The old `tests/results.txt` is not touched. `--no-aida` and
 | `finite` | `tests/finite_results_a0_<aida\|noaida>.txt` |
 | `random` | `tests/results_a0.txt` |
 | `kerber` | `tests/small_instance_results_a0.txt` |
+| `kerber-extended` | `tests/kerber_extended_results.txt` |
 
 Columns:
 
@@ -310,3 +311,36 @@ Pairs are only within the same suffix (`.scc_k`, `.minpres_k`, or plain
 The results file has no Hera columns: Hera reads only `.bif` files. The old
 distance logs `tests/small_instance_results.txt` and
 `tests/small_instance_results_refine.txt` are not touched.
+
+## Kerber `instances`: repeats of one construction
+
+`data_benchmarks/README.txt` names the files
+`[instance_type]_[instance_size]_[instance_number].scc_[dimension]`, where
+the instance numbers 1–5 are repeats of the same construction with
+different random seeds. `./bench.py kerber-extended` pairs only repeats:
+same type, size, and dimension (the `full_rips`, `function_rips`, and
+`random` files spell the same scheme differently; see `construction()` in
+`bench.py`). Such pairs come from the same distribution and the same
+homology degree, so their matching distance is usually finite and nonzero,
+unlike many pairs of `kerber`, which mixes constructions.
+
+The full `instances` folder (1,287 files, 7.2 GB) is scanned for files with
+at most 400 distinct bigrades (`--max-grades`); the scan stops reading a
+file as soon as it exceeds the limit. 78 files qualify, and 73 of them
+belong to a construction with at least two qualifying repeats, giving 131
+pairs in 17 groups:
+
+| Group | Bigrades | Pairs |
+| --- | --- | --- |
+| `function_rips_with_threshold_{01,02,04,08}000000` (`.scc.minpres_0`) | 24–255 | 40 |
+| `full_rips_size_{1,2,3,4}` (`.scc.minpres_0`) | 91–281 | 40 |
+| `random_0200` (`.scc`, the random presentations of Dey, Jendrysiak, Kerber) | 384–395 | 10 |
+| `*_eccentricity_*` (`.scc_0`, the top homology) | 2–20 | 41 |
+
+All other constructions have more than 400 bigrades per file, so their
+$A_0$ alone would be far larger than anything tested here.
+
+```bash
+./bench.py kerber-extended --distance --timeout 300
+./bench.py kerber-extended --max-grades 200      # only the smaller groups
+```

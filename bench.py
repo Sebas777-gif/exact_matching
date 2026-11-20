@@ -8,8 +8,9 @@ matching distance), and with --distance computes the matching distance.
   ./bench.py finite            the 18 random pairs with a finite matching distance
   ./bench.py random            every pair of tests/random_bifiltrations/*.bif
   ./bench.py kerber            feasible pairs of data_benchmarks/small_instances
+  ./bench.py kerber-extended   repeats of the same construction in data_benchmarks/instances
 
-finite, random, and kerber append one row per pair to a results file and
+finite, random, kerber, and kerber-extended append one row per pair to a results file and
 resume where they stopped. --a0-only skips F (play --a0-only) in every set.
 --incremental (with --samples K, --seed N, --bound B) uses the red/green
 insertion instead of evaluating F at every A0 vertex; the result must be the
@@ -38,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 BIF_DIR = ROOT / "tests" / "random_bifiltrations"
 KERBER_DIR = ROOT / "data_benchmarks" / "small_instances"
+KERBER_ALL_DIR = ROOT / "data_benchmarks" / "instances"
 
 
 # --- pairs ------------------------------------------------------------------
@@ -676,6 +678,93 @@ def cmd_kerber(args):
     return benchmark(args, pairs, results)
 
 
+# kerber-extended: data_benchmarks/README.txt names files
+#   [instance_type]_[instance_size]_[instance_number].scc_[dimension],
+# where instance numbers 1-5 are repeats of the same construction with
+# different random seeds. Pairs of repeats (same type, size, and dimension)
+# are natural test pairs: same distribution, same homology degree, and
+# usually a finite nonzero matching distance. The full_rips, function_rips,
+# and random files use other spellings of the same scheme.
+CONSTRUCTION_PATTERNS = [
+    re.compile(r"^(?P<group>.+_\d+)_(?P<instance>\d+)\.(?P<dim>scc_\d+)$"),
+    re.compile(r"^(?P<group>full_rips_size_\d+)_instance_(?P<instance>\d+)\.(?P<dim>scc\.minpres_\d+)$"),
+    re.compile(r"^(?P<group>.+)_(?P<instance>\d+)\.(?P<dim>scc\.minpres_\d+|scc)$"),
+]
+
+
+def construction(name):
+    """(construction, instance number) of a benchmark file name, or None.
+    The construction includes the dimension suffix, so only files of the same
+    homology degree share one."""
+    for pattern in CONSTRUCTION_PATTERNS:
+        if m := pattern.match(name):
+            return f"{m['group']}.{m['dim']}", m["instance"]
+    return None
+
+
+def count_grades(path, cap):
+    """Distinct bigrades of the first scc2020 block of path, or None if there
+    are more than cap. Stops reading as soon as the cap is exceeded, so large
+    files cost little."""
+    grades, started, header = set(), False, 0
+    with path.open(errors="replace") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if not started:
+                started = line == "scc2020"
+                continue
+            if header < 2:   # the number of parameters and the sizes
+                header += 1
+                continue
+            if line == "scc2020":
+                break
+            parts = line.split(";", 1)[0].split()
+            if len(parts) >= 2:
+                grades.add((parts[0], parts[1]))
+                if len(grades) > cap:
+                    return None
+    return len(grades) if started else None
+
+
+def cmd_kerber_extended(args):
+    if not KERBER_ALL_DIR.is_dir():
+        sys.exit(f"error: missing directory {KERBER_ALL_DIR}")
+    groups = defaultdict(list)
+    names = sorted(p.name for p in KERBER_ALL_DIR.iterdir() if p.is_file())
+    print(f"Scanning {len(names)} files for <= {args.max_grades} distinct bigrades ...", flush=True)
+    for name in names:
+        key = construction(name)
+        if key is None:
+            continue
+        n = count_grades(KERBER_ALL_DIR / name, args.max_grades)
+        if n is not None:
+            groups[key[0]].append((name, n))
+    pairs = []
+    for group in sorted(groups):
+        items = sorted(groups[group])
+        if len(items) < 2:
+            continue
+        print(f"  {group}: {len(items)} files, grades {[n for _, n in items]}")
+        pairs += [(na + nb, a, b, na, nb, group)
+                  for i, (a, na) in enumerate(items) for b, nb in items[i + 1:]]
+    pairs = [(KERBER_ALL_DIR / a, KERBER_ALL_DIR / b, f"  ({group}, grades {na} + {nb})")
+             for _, a, b, na, nb, group in sorted(pairs)]
+    if not pairs:
+        sys.exit("error: no construction has two feasible repeats")
+    files = len({p for a, b, _ in pairs for p in (a, b)})
+    print(f"{files} files, {len(pairs)} pairs of repeats\n")
+    results = Results(args.results or ROOT / "tests/kerber_extended_results.txt",
+                      "Benchmark: repeats of the same construction in data_benchmarks/instances",
+                      {"max_grades": args.max_grades,
+                       "preprocess": "aida" if args.aida else "noaida",
+                       "max_F": evaluated(args)},
+                      {"play": args.play, "files": files, "pairs": len(pairs)},
+                      HERA_COLUMNS[:-2], args.fresh)
+    return benchmark(args, pairs, results)
+
+
 # --- command line -----------------------------------------------------------------
 
 def parse_args():
@@ -746,6 +835,11 @@ def parse_args():
         results=True, dim=True)
     kerber = add("kerber", cmd_kerber, "feasible pairs of data_benchmarks/small_instances",
                  aida=True, results=True)
+    extended = add("kerber-extended", cmd_kerber_extended,
+                   "pairs of repeats (instance numbers) of the same construction in "
+                   "data_benchmarks/instances", aida=True, results=True)
+    extended.add_argument("--max-grades", type=int, default=400, metavar="N",
+                          help="largest number of distinct bigrades per file (default: 400)")
     kerber.add_argument("--max-grades", type=int, default=200, metavar="N",
                         help="largest number of distinct bigrades per file (default: 200)")
 
