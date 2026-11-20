@@ -1,3 +1,4 @@
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -14,7 +15,8 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " file1 file2 [--dim d] [--no-aida] [--a0-only]"
               << " [--incremental [--samples k] [--seed n] [--no-skip]"
-              << " [--bound lipschitz|variation]]"
+              << " [--bound lipschitz|variation|barbox|both]]"
+              << " [--distance [--max-candidates k]]"
               << " (each file .scc, .scc_k, .minpres_k, .sccsum, or .bif)"
               << std::endl;
     std::exit(1);
@@ -25,9 +27,11 @@ int main(int argc, char** argv) {
   bool evaluate = true;
   bool incremental = false;
   bool skip_covered = true;
-  matching::FaceBound bound = matching::FaceBound::variation;
+  matching::FaceBound bound = matching::FaceBound::both;
+  bool distance = false;
   long samples = 50;
   long seed = 1;
+  long max_candidates = 500;
   int homology_dim = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -46,11 +50,18 @@ int main(int argc, char** argv) {
         bound = matching::FaceBound::lipschitz;
       } else if (kind == "variation") {
         bound = matching::FaceBound::variation;
+      } else if (kind == "barbox") {
+        bound = matching::FaceBound::barbox;
+      } else if (kind == "both") {
+        bound = matching::FaceBound::both;
       } else {
-        std::cerr << "--bound needs lipschitz or variation" << std::endl;
+        std::cerr << "--bound needs lipschitz, variation, barbox, or both" << std::endl;
         std::exit(1);
       }
-    } else if (arg == "--samples" || arg == "--seed") {
+    } else if (arg == "--distance") {
+      distance = true;
+      incremental = true;  // the local phase works on the colored arrangement
+    } else if (arg == "--samples" || arg == "--seed" || arg == "--max-candidates") {
       if (i + 1 >= argc) {
         std::cerr << arg << " needs an integer" << std::endl;
         std::exit(1);
@@ -60,7 +71,7 @@ int main(int argc, char** argv) {
         std::cerr << arg << " must be non-negative" << std::endl;
         std::exit(1);
       }
-      (arg == "--samples" ? samples : seed) = value;
+      (arg == "--samples" ? samples : arg == "--seed" ? seed : max_candidates) = value;
     } else if (arg == "--dim") {
       if (i + 1 >= argc) {
         std::cerr << "--dim needs an integer" << std::endl;
@@ -131,28 +142,58 @@ int main(int argc, char** argv) {
   const std::size_t a0_vertices = flat.number_of_vertices() + steep.number_of_vertices();
 
   if (incremental) {
-    matching::StripStats flat_stats, steep_stats;
-    const std::optional<matching::FT> result = matching::incremental_max_F(
-        modules[0], modules[1], samples, seed, flat_stats, steep_stats, skip_covered, bound);
+    matching::IncrementalOptions options;
+    options.samples = samples;
+    options.seed = seed;
+    options.skip_covered = skip_covered;
+    options.bound = bound;
+    options.local_phase = distance;
+    options.max_candidates = max_candidates;
+    const matching::IncrementalResult result =
+        matching::incremental_max_F(modules[0], modules[1], options);
+
     auto strip = [](const char* name, const matching::StripStats& st) {
       std::cout << name << st.samples << " samples, " << st.evaluations << " evaluations, "
                 << st.skipped << " skipped, " << st.segments << " segments; final " << st.vertices << " vertices, "
                 << st.edges << " edges, " << st.faces << " faces (" << st.red_faces
                 << " red)" << std::endl;
     };
+    const char* bound_name = bound == matching::FaceBound::lipschitz ? "Lipschitz"
+                           : bound == matching::FaceBound::variation ? "variation"
+                           : bound == matching::FaceBound::barbox    ? "bar-box"
+                                                                     : "variation and bar-box";
     std::cout << "Incremental: " << std::max(1L, samples) << " samples, seed " << seed
-              << (skip_covered ? ", skipping covered vertices" : "")
-              << (bound == matching::FaceBound::lipschitz ? ", Lipschitz bound" : ", variation bound")
-              << std::endl;
-    if (result) {
-      strip("Flat strip:  ", flat_stats);
-      strip("Steep strip: ", steep_stats);
+              << (skip_covered ? ", skipping covered vertices" : "") << ", " << bound_name
+              << " bound" << std::endl;
+    if (result.a0_max) {
+      strip("Flat strip:  ", result.flat);
+      strip("Steep strip: ", result.steep);
     }
-    const std::size_t evaluations = flat_stats.samples + flat_stats.evaluations
-        + steep_stats.samples + steep_stats.evaluations;
+    const std::size_t evaluations = result.flat.samples + result.flat.evaluations
+        + result.steep.samples + result.steep.evaluations;
     std::cout << "F evaluations: " << evaluations << " (A0 has " << a0_vertices
               << " vertices)" << std::endl;
-    std::cout << "Max F on A0 vertices: " << format(result) << std::endl;
+    // Evaluating F at every A0 vertex is the brute force; this is what the
+    // pruning saved (negative if the samples cost more than they saved).
+    const double pruned = a0_vertices ? 100.0 * (1.0 - double(evaluations) / a0_vertices) : 0.0;
+    std::cout << "Pruned: " << std::fixed << std::setprecision(1) << pruned << std::defaultfloat
+              << std::setprecision(6) << "% of the A0 vertex evaluations avoided" << std::endl;
+    std::cout << "Max F on A0 vertices: " << format(result.a0_max) << std::endl;
+    if (distance) {
+      const matching::LocalStats& L = result.local;
+      std::cout << "Local phase: " << L.red_faces << " red faces, " << L.candidates
+                << " candidate functions (at most " << L.largest << " in a face), " << L.lines
+                << " relevant lines, " << L.points << " candidate points, " << L.certified
+                << " certified without evaluating, " << L.evaluations
+                << " evaluations, " << L.over_limit << " faces over the candidate limit"
+                << std::endl;
+      std::cout << "Matching distance: " << format(result.distance);
+      if (L.over_limit)
+        std::cout << ", lower bound (" << L.over_limit << " faces over the candidate limit)";
+      else
+        std::cout << ", exact";
+      std::cout << std::endl;
+    }
     return 0;
   }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests and benchmarks for play, which builds the A0 arrangement
 and evaluates F on its vertices (max F on A0 vertices, a lower bound on the
-matching distance).
+matching distance), and with --distance computes the matching distance.
 
   ./bench.py small [--fast]    exact A0 counts and max F for small pairs; exit 1 on a mismatch
   ./bench.py medium [--aida]   larger pairs with known distances; checks max F against them
@@ -11,8 +11,9 @@ matching distance).
 
 finite, random, and kerber append one row per pair to a results file and
 resume where they stopped. --a0-only skips F (play --a0-only) in every set.
---incremental (with --samples K, --seed N) uses the red/green insertion
-instead of evaluating F at every A0 vertex; the result must be the same.
+--incremental (with --samples K, --seed N, --bound B) uses the red/green
+insertion instead of evaluating F at every A0 vertex; the result must be the
+same. --distance adds the local phase and reports the matching distance.
 ./bench.py SET --help lists the options of a set.
 Ctrl+N skips the running pair. Ctrl+C stops and keeps all completed rows.
 """
@@ -46,8 +47,8 @@ def v10(sample):
 
 
 # small: name, expected "lines vertices edges faces", expected max F on the
-# A0 vertices (exact, as play prints it), play arguments. Always run with
-# --no-aida. Lines are the flat strip's segments; the other three are the
+# A0 vertices (exact, as play prints it), expected matching distance d
+# (checked with --distance), play arguments. Always run with --no-aida. Lines are the flat strip's segments; the other three are the
 # totals of the flat and steep strips.
 #
 # d is the matching distance each pair was built for. Max F is derived by
@@ -61,8 +62,8 @@ SMALL = [
     # 4 vertices, 5 edges, 3 faces. Max F = 1: at the vertex (1, 0) the
     # bars are [0, 2) and [0, 1), and pairing them costs 1. The .bif
     # version adds one infinite bar at push(0, 0) to both sides (cost 0).
-    ("interval scc", "4 8 10 6", "1", ["tests/interval_long.scc", "tests/interval_short.scc"]),
-    ("interval bif", "4 8 10 6", "1", ["tests/interval_long.bif", "tests/interval_short.bif"]),
+    ("interval scc", "4 8 10 6", "1", "1", ["tests/interval_long.scc", "tests/interval_short.scc"]),
+    ("interval bif", "4 8 10 6", "1", "1", ["tests/interval_long.bif", "tests/interval_short.bif"]),
     # Two origin vertices merging at (51,0) vs a single infinite bar
     # (d = 25.5). The .scc version adds unused grades at x, y in
     # {10, 20, 30} that only cut A0; the .bif version does not (its second
@@ -70,26 +71,26 @@ SMALL = [
     # infinite bars both start at push(0,0); the finite bar
     # [max(0, t), max(0, 51 s + t)) goes to the diagonal, which costs 51/2
     # at the vertex (1, 0) (end of the dual of (0,0)). Same in the steep strip.
-    ("far_merge vs A0 anchors", "10 25 37 16", "51/2",
+    ("far_merge vs A0 anchors", "10 25 37 16", "51/2", "51/2",
      ["tests/far_merge.scc", "tests/a0_anchors.scc"]),
-    ("far_merge bif", "4 10 12 6", "51/2", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
+    ("far_merge bif", "4 10 12 6", "51/2", "51/2", ["tests/far_merge.bif", "tests/a0_anchors.bif"]),
     # Horizontal merge at (50,0) vs vertical merge at (0,50) (d = 25).
     # Max F = 25: at the vertex (0, 0), the horizontal slice y = 0, the
     # horizontal bar has length 0 and the vertical one is [0, 50).
-    ("horizontal vs vertical merge", "5 10 12 6", "25",
+    ("horizontal vs vertical merge", "5 10 12 6", "25", "25",
      ["tests/merge_horizontal.scc", "tests/merge_vertical.scc"]),
     # Different numbers of infinite bars (d = infinity): F is infinite
     # on every slice.
-    ("unmatched infinite bars", "3 6 6 4", "inf", ["tests/free_one.scc", "tests/free_two.scc"]),
+    ("unmatched infinite bars", "3 6 6 4", "inf", "inf", ["tests/free_one.scc", "tests/free_two.scc"]),
     # Raw H_2 presentations of two prism 2-skeleta (d = infinity): 8 vs 9
     # generators and no relations, so 8 vs 9 infinite bars.
-    ("prism H_2", "7 14 20 10", "inf", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
+    ("prism H_2", "7 14 20 10", "inf", "inf", ["tests/prism_1.bif", "tests/prism_2.bif", "--dim", "2"]),
     # L of two intervals vs one spanning interval (d = 1.5). The maximum of
     # F sits at (s, t) = (1, 1/2), on an A0 edge, not an A0 vertex. Max F
     # on the vertices is 1, checked at all 7 flat and 8 steep vertices; it
     # is reached at (1, 0) in both strips (span [0,3) pairs with [1,2) at
     # cost 1, the other L bar [2,3) goes to the diagonal at 1/2).
-    ("ell vs span", "7 15 23 12", "1", ["tests/ell.scc", "tests/span.scc"]),
+    ("ell vs span", "7 15 23 12", "1", "3/2", ["tests/ell.scc", "tests/span.scc"]),
 ]
 
 # small, skipped with --fast.
@@ -97,16 +98,18 @@ SMALL_SLOW = [
     # far_merge with 140 unused relation grades (d = 25.5). The extra
     # relations are empty columns, so the barcodes and the argument are
     # those of "far_merge vs A0 anchors".
-    ("far_merge vs 140 A0 anchors", "144 427 707 284", "51/2",
+    ("far_merge vs 140 A0 anchors", "144 427 707 284", "51/2", "51/2",
      ["tests/far_merge.scc", "tests/a0_anchors_medium.scc"]),
     # Merge pair with ~140 distinct grades (d = 25), again only empty extra
     # relations: same argument as "horizontal vs vertical merge".
-    ("horizontal vs vertical merge medium", "145 608 1072 468", "25",
+    ("horizontal vs vertical merge medium", "145 608 1072 468", "25", "25",
      ["tests/merge_horizontal_medium.scc", "tests/merge_vertical_medium.scc"]),
     # Real 10-vertex 1-skeleta, H_0 (d = 3 and 2.5). Max F not derived by
     # hand: recorded from play. It equals d, the largest value possible.
-    ("v10 bif sample 1 vs 2", "74 1131 2338 1211", "3", [v10(1), v10(2), "--dim", "0"]),
-    ("v10 bif sample 1 vs 5", "71 983 2032 1053", "5/2", [v10(1), v10(5), "--dim", "0"]),
+    # d is None: without AIDA each module is one large summand, and the
+    # local phase takes minutes here, so --distance skips these two cases.
+    ("v10 bif sample 1 vs 2", "74 1131 2338 1211", "3", None, [v10(1), v10(2), "--dim", "0"]),
+    ("v10 bif sample 1 vs 5", "71 983 2032 1053", "5/2", None, [v10(1), v10(5), "--dim", "0"]),
 ]
 
 # medium: name, known matching distance d, how max F on the A0 vertices is
@@ -243,29 +246,57 @@ def run_play(args, files, dim=None):
         cmd.append("--no-aida")
     if args.a0_only:
         cmd.append("--a0-only")
-    elif args.incremental:
+    elif args.incremental or args.distance:
         cmd += ["--incremental", "--samples", str(args.samples), "--seed", str(args.seed)]
         if args.no_skip:
             cmd.append("--no-skip")
         cmd += ["--bound", args.bound]
+        if args.distance:
+            cmd += ["--distance", "--max-candidates", str(args.max_candidates)]
     return run(cmd, args.timeout)
 
 
-def a0_stats(r, a0_only):
-    """(lines, vertices, edges, faces, max_F, max_F_decimal, evaluations)
-    from play's output, or None. max_F is exact, as play prints it ("3/2",
-    "inf"); max_F_decimal is play's decimal ("1.5", "inf"); evaluations is
-    the number of F evaluations. The last three are "" with --a0-only."""
-    lines = re.search(r"^A0 lines: (\d+)", r.stdout, re.M)
-    arr = re.search(r"^Arrangement has (\d+) vertices, (\d+) edges, and (\d+) faces",
-                    r.stdout, re.M)
-    max_f = re.search(r"^Max F on A0 vertices: (\S+)(?: \((\S+)\))?", r.stdout, re.M)
-    if r.status != "ok" or not (lines and arr and (max_f or a0_only)):
+# The values read from play's output, in the order of the results columns.
+#   max_F, max_F_decimal     max F on the A0 vertices, exact ("3/2", "inf") and decimal
+#   evaluations              F evaluations for that maximum
+#   pruned_pct               share of the A0 vertex evaluations avoided (incremental only)
+#   distance, distance_decimal, distance_status
+#                            the matching distance (--distance only); status "exact" or
+#                            "lower bound" (faces over the candidate limit)
+#   local_evaluations        F evaluations of the local phase (--distance only)
+STATS = ["a0_lines", "vertices", "edges", "faces", "max_F", "max_F_decimal", "evaluations",
+         "pruned_pct", "distance", "distance_decimal", "distance_status", "local_evaluations"]
+
+
+def play_stats(r, args):
+    """The STATS values from play's output, as a dict of strings ("" where
+    play did not print a value), or None if a required line is missing."""
+    def find(pattern):
+        return re.search(pattern, r.stdout, re.M)
+
+    lines = find(r"^A0 lines: (\d+)")
+    arr = find(r"^Arrangement has (\d+) vertices, (\d+) edges, and (\d+) faces")
+    max_f = find(r"^Max F on A0 vertices: (\S+)(?: \((\S+)\))?")
+    dist = find(r"^Matching distance: (\S+?)(?: \(([^)]*)\))?, (exact|lower bound)")
+    if r.status != "ok" or not (lines and arr) or not (max_f or args.a0_only):
         return None
-    evals = re.search(r"^F evaluations: (\d+)", r.stdout, re.M)
-    if not max_f:
-        return (lines[1], *arr.groups(), "", "", "")
-    return (lines[1], *arr.groups(), max_f[1], max_f[2] or max_f[1], evals[1] if evals else "")
+    if args.distance and not args.a0_only and not dist:
+        return None
+    st = dict.fromkeys(STATS, "")
+    st["a0_lines"] = lines[1]
+    st["vertices"], st["edges"], st["faces"] = arr.groups()
+    if max_f:
+        st["max_F"], st["max_F_decimal"] = max_f[1], max_f[2] or max_f[1]
+    if m := find(r"^F evaluations: (\d+)"):
+        st["evaluations"] = m[1]
+    if m := find(r"^Pruned: (-?[\d.]+)%"):
+        st["pruned_pct"] = m[1]
+    if dist:
+        st["distance"], st["distance_decimal"], st["distance_status"] = (
+            dist[1], dist[2] or dist[1], dist[3])
+    if m := find(r"^Local phase: .*?, (\d+) evaluations,"):
+        st["local_evaluations"] = m[1]
+    return st
 
 
 def as_number(value):
@@ -279,29 +310,40 @@ def as_number(value):
         return None
 
 
-def a0_fields(r, stats):
-    """The a0_lines, vertices, edges, faces, max_F, max_F_decimal, evaluations
-    columns of a results row."""
+def stat_fields(r, stats):
+    """The STATS columns of a results row."""
     if stats:
-        return list(stats)
+        return [stats[k] for k in STATS]
     if r.status == "skip":
-        return ["???"] * 7
-    return ["timeout" if r.status == "timeout" else "error", "", "", "", "", "", ""]
+        return ["???"] * len(STATS)
+    return ["timeout" if r.status == "timeout" else "error"] + [""] * (len(STATS) - 1)
+
+
+def summary(st):
+    """The play values of one run, as one line of text."""
+    text = f"{st['a0_lines']} lines, {st['vertices']} vertices, {st['edges']} edges, {st['faces']} faces"
+    if st["max_F"]:
+        text += f", max F {st['max_F']}"
+        if st["max_F_decimal"] != st["max_F"]:
+            text += f" ({st['max_F_decimal']})"
+    if st["evaluations"]:
+        text += f", {st['evaluations']} F evaluations"
+    if st["pruned_pct"]:
+        text += f" ({st['pruned_pct']}% pruned)"
+    if st["distance"]:
+        text += f", distance {st['distance']}"
+        if st["distance_decimal"] != st["distance"]:
+            text += f" ({st['distance_decimal']})"
+        text += f" [{st['distance_status']}], {st['local_evaluations']} local evaluations"
+    return text
 
 
 def outcome(r, stats=None, lines=8):
     """One-line summary of a play run; on failure, the last lines of its output."""
     if stats:
-        text = "{} lines, {} vertices, {} edges, {} faces".format(*stats[:4])
-        if stats[4]:
-            text += f", max F {stats[4]}"
-            if stats[5] != stats[4]:
-                text += f" ({stats[5]})"
-            if stats[6]:
-                text += f", {stats[6]} F evaluations"
-        return text + f"  ({r.seconds}s)"
+        return summary(stats) + f"  ({r.seconds}s)"
     if r.status == "ok":
-        return f"FAIL no A0 counts or max F in the output  ({r.seconds}s)"
+        return f"FAIL a line is missing in play's output  ({r.seconds}s)"
     if r.status != "fail":
         return f"{r.status.upper()}  ({r.seconds}s)"
     out = "\n".join((r.stderr + r.stdout).rstrip().splitlines()[-lines:])
@@ -371,8 +413,9 @@ def benchmark(args, pairs, results, dim=None):
     columns, a Hera value; done pairs are skipped when resuming. ??? marks a
     pair skipped with Ctrl+N; it is not retried."""
     with_hera = dim is not None
+    hera_col = 2 + len(STATS) + 1  # after file_a, file_b, STATS, seconds
     done = {(r[0], r[1]) for r in results.rows
-            if len(r) > 2 and r[2] and (not with_hera or (len(r) > 10 and r[10]))}
+            if len(r) > 2 and r[2] and (not with_hera or (len(r) > hera_col and r[hera_col]))}
     print(f"play: {args.play}  ({'AIDA' if args.aida else '--no-aida'})")
     if with_hera:
         print(f"hera: {args.hera or 'skipped'}")
@@ -392,11 +435,11 @@ def benchmark(args, pairs, results, dim=None):
             r = run_play(args, [a, b], dim)
         except KeyboardInterrupt:
             if args.hera and with_hera:   # keep Hera's result; play is redone on resume
-                results.append([a.name, b.name, "", "", "", "", "", "", "", "", *hera])
+                results.append([a.name, b.name, *[""] * (len(STATS) + 1), *hera])
             raise
-        stats = a0_stats(r, args.a0_only)
-        print("  A0: " + outcome(r, stats))
-        results.append([a.name, b.name, *a0_fields(r, stats), r.seconds, *hera])
+        stats = play_stats(r, args)
+        print("  play: " + outcome(r, stats))
+        results.append([a.name, b.name, *stat_fields(r, stats), r.seconds, *hera])
     print(f"Done. Results: {results.path}")
     return 0
 
@@ -408,16 +451,36 @@ def cmd_small(args):
     print(f"play: {args.play}  (--no-aida, timeout {args.timeout:g}s)")
     print(f"method: {method(args)}")
     print("columns: A0 lines, vertices, edges, faces" +
-          ("" if args.a0_only else ", max F on A0 vertices; then the F evaluations") + "\n")
-    failed = 0
-    for name, expected_a0, expected_f, play_args in cases:
+          ("" if args.a0_only else ", max F on A0 vertices") +
+          (", d = matching distance" if args.distance and not args.a0_only else "") +
+          ("" if args.a0_only else "; then the F evaluations") + "\n")
+    failed = skipped = 0
+    for name, expected_a0, expected_f, expected_d, play_args in cases:
+        if args.distance and not args.a0_only and expected_d is None:
+            print(f"{name:<42}skipped (too slow with --distance and --no-aida)")
+            skipped += 1
+            continue
         expected = expected_a0 if args.a0_only else f"{expected_a0} {expected_f}"
+        if args.distance and not args.a0_only:
+            expected += f" d={expected_d} exact"
         print(f"{name:<42}", end="", flush=True)
         r = run_play(args, play_args)
-        stats = a0_stats(r, args.a0_only)
-        got = " ".join(x for x in stats[:5] if x) if stats else ""
+        stats = play_stats(r, args)
+        got = ""
+        if stats:
+            got = " ".join(stats[k] for k in ["a0_lines", "vertices", "edges", "faces", "max_F"]
+                           if stats[k])
+            if stats["distance"]:
+                got += f" d={stats['distance']} {stats['distance_status']}"
         if got == expected:
-            evals = f"  [{stats[6]} evaluations]" if stats[6] else ""
+            evals = ""
+            if stats["evaluations"]:
+                evals = f"  [{stats['evaluations']} evaluations"
+                if stats["pruned_pct"]:
+                    evals += f", {stats['pruned_pct']}% pruned"
+                if stats["local_evaluations"]:
+                    evals += f", {stats['local_evaluations']} local"
+                evals += "]"
             print(f"ok  {got}{evals}  ({r.seconds}s)")
             continue
         failed += 1
@@ -425,8 +488,10 @@ def cmd_small(args):
             print(f"FAIL got '{got}' expected '{expected}'  ({r.seconds}s)")
         else:
             print(outcome(r, lines=20))
-    print(f"\nAll {len(cases)} tests passed." if not failed
-          else f"\n{len(cases) - failed} passed, {failed} failed.")
+    ran = len(cases) - skipped
+    note = f" ({skipped} skipped)" if skipped else ""
+    print(f"\nAll {ran} tests passed{note}." if not failed
+          else f"\n{ran - failed} passed, {failed} failed{note}.")
     return 1 if failed else 0
 
 
@@ -440,48 +505,66 @@ def cmd_medium(args):
         print(f"hera: {args.hera}  (reference only, timeout {args.hera_timeout:g}s)\n")
     else:
         print("hera: skipped\n")
-    table = ["name\tknown_dist\ta0_lines\tvertices\tedges\tfaces\tmax_F\tmax_F_decimal"
-             "\tevaluations\tseconds\tstatus\thera\thera_seconds"]
-    failed = 0
+    table = ["\t".join(["name", "known_dist", *STATS, "seconds", "status", "hera", "hera_seconds"])]
+    failed = skipped = 0
     try:
         for name, known, check, a, b in MEDIUM:
             print(f"{name:<40}", end="", flush=True)
+            # Real pairs (paths) without AIDA: one large summand per module,
+            # and the local phase takes minutes; use --aida with --distance.
+            if args.distance and not args.aida and "/" in a:
+                print("skipped (too slow with --distance and --no-aida; use --aida)")
+                skipped += 1
+                continue
             hera, hera_sec = "skip", ""
             hera_a, hera_b = path(a, "bif"), path(b, "bif")
             if args.hera and os.path.exists(hera_a) and os.path.exists(hera_b):
                 hera, hera_sec = run_hera(args, hera_a, hera_b, "0")
             ext = "bif" if args.aida else "scc"
             r = run_play(args, [path(a, ext), path(b, ext)], "0")
-            stats = a0_stats(r, args.a0_only)
+            stats = play_stats(r, args)
             ref = f"known {known}" + (f", hera {hera} ({hera_sec}s)" if hera != "skip" else "")
+            status = "ok" if stats else r.status
             if stats and not args.a0_only:
-                f, d = as_number(stats[4]), Fraction(known)
-                if f == d if check == "=" else f <= d:
-                    status = "ok"
-                else:
+                f, d = as_number(stats["max_F"]), Fraction(known)
+                if not (f == d if check == "=" else f <= d):
                     status = f"max F not {check} known"
-            else:
-                status = "ok" if stats else r.status
+                # The matching distance must equal the known distance; a lower
+                # bound (faces over the candidate limit) must not exceed it.
+                if args.distance:
+                    got_d = as_number(stats["distance"])
+                    if stats["distance_status"] == "exact" and got_d != d:
+                        status = "distance not = known"
+                    elif stats["distance_status"] != "exact" and not (f <= got_d <= d):
+                        status = "lower bound not between max F and known"
             if stats:
-                summary = f"{stats[0]} lines, {stats[1]} vertices"
+                text = f"{stats['a0_lines']} lines, {stats['vertices']} vertices"
                 if not args.a0_only:
-                    summary += f", max F {stats[4]} ({check} {known}), {stats[6]} evaluations"
-                print(f"{'ok  ' if status == 'ok' else 'FAIL '}{summary}  ({r.seconds}s)  {ref}")
+                    text += f", max F {stats['max_F']} ({check} {known}), {stats['evaluations']} evaluations"
+                    if stats["pruned_pct"]:
+                        text += f" ({stats['pruned_pct']}% pruned)"
+                if stats["distance"]:
+                    text += (f", distance {stats['distance']} [{stats['distance_status']}],"
+                             f" {stats['local_evaluations']} local evaluations")
+                print(f"{'ok  ' if status == 'ok' else 'FAIL '}{text}  ({r.seconds}s)  {ref}")
+                if status != "ok":
+                    print(f"     {status}")
             else:
                 print(f"{ref}\n{outcome(r)}")
             if status != "ok":
                 failed += 1
-            table.append("\t".join([name, known, *(stats or [""] * 7), r.seconds, status,
+            table.append("\t".join([name, known, *stat_fields(r, stats), r.seconds, status,
                                     hera, hera_sec]))
     finally:
         print("\n" + "\n".join(table))
-    print(f"\nAll {len(MEDIUM)} medium cases passed." if not failed
-          else f"\n{len(MEDIUM) - failed} passed, {failed} failed.")
+    ran = len(MEDIUM) - skipped
+    note = f" ({skipped} skipped)" if skipped else ""
+    print(f"\nAll {ran} medium cases passed{note}." if not failed
+          else f"\n{ran - failed} passed, {failed} failed{note}.")
     return 1 if failed else 0
 
 
-HERA_COLUMNS = ["file_a", "file_b", "a0_lines", "vertices", "edges", "faces", "max_F",
-                "max_F_decimal", "evaluations", "seconds", "hera_distance", "hera_seconds"]
+HERA_COLUMNS = ["file_a", "file_b", *STATS, "seconds", "hera_distance", "hera_seconds"]
 
 
 def evaluated(args):
@@ -490,12 +573,16 @@ def evaluated(args):
 
 
 def method(args):
-    """How play computes max F: every A0 vertex, or the red/green insertion."""
+    """How play computes max F: every A0 vertex, or the red/green insertion
+    (with --distance followed by the local phase)."""
     if args.a0_only:
         return "A0 only (--a0-only)"
-    if args.incremental:
+    if args.incremental or args.distance:
         skip = "no skipping" if args.no_skip else "skipping covered vertices"
-        return f"incremental, {args.samples} samples, seed {args.seed}, {skip}, {args.bound} bound"
+        text = f"incremental, {args.samples} samples, seed {args.seed}, {skip}, {args.bound} bound"
+        if args.distance:
+            text += f", local phase (at most {args.max_candidates} candidates per face)"
+        return text
     return "all A0 vertices"
 
 
@@ -585,7 +672,7 @@ def cmd_kerber(args):
                        "preprocess": "aida" if args.aida else "noaida",
                        "max_F": evaluated(args)},
                       {"play": args.play, "files": len(files), "pairs": len(pairs)},
-                      HERA_COLUMNS[:10], args.fresh)
+                      HERA_COLUMNS[:-2], args.fresh)
     return benchmark(args, pairs, results)
 
 
@@ -615,8 +702,14 @@ def parse_args():
                        help="with --incremental: random seed (default: 1)")
         s.add_argument("--no-skip", action="store_true",
                        help="with --incremental: evaluate vertices covered by a sample too")
-        s.add_argument("--bound", choices=["variation", "lipschitz"], default="variation",
-                       help="with --incremental: face bound (default: variation)")
+        s.add_argument("--bound", choices=["both", "barbox", "variation", "lipschitz"],
+                       default="both", help="with --incremental: face bound (default: both)")
+        s.add_argument("--distance", action="store_true",
+                       help="also compute the matching distance (play --distance; implies "
+                            "--incremental)")
+        s.add_argument("--max-candidates", type=int, default=500, metavar="K",
+                       help="with --distance: skip red faces with more candidate functions; "
+                            "the distance is then only a lower bound (default: 500)")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()

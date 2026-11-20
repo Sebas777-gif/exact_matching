@@ -4,8 +4,10 @@ Goal: compute the matching distance between two 2-parameter persistence
 modules from finite presentations, following Kerber, Lesnick, and Oudot,
 [*Exact Computation of the Matching Distance on 2-Parameter Persistence Modules*](https://arxiv.org/abs/1812.09085).
 
-**Current state:** the program only builds the coarse arrangement $A_0$,
-in two strips of the $(s,t)$ parameter plane:
+**Current state:** the program builds the coarse arrangement $A_0$ and
+evaluates $F$ on it, and with `--distance` it computes the matching
+distance, without building the refined arrangement $A$ (see below). $A_0$
+is built in two strips of the $(s,t)$ parameter plane:
 
 - the **flat strip**: slices $y = sx + t$ with $0 \le s \le 1$;
 - the **steep strip**: slices $x = sy + t$ with $0 \le s \le 1$, built the
@@ -19,12 +21,28 @@ $0 \le s \le 1$, per distinct input grade $v$ of either module, plus the
 walls $s=0$ and $s=1$. Each wall runs from the lowest to the highest segment
 endpoint on it, and is left out if those coincide.
 
-The program then evaluates $F$ (the weighted bottleneck distance of the two
-slice barcodes, computed exactly) at every vertex of both strips and prints
-the maximum. That is a **lower bound** on the matching distance, not the
-matching distance: the maximum of $F$ can lie on an edge of $A_0$ (see
-`ell` vs `span` in `tests/README.md`). The refinement of $A_0$ to $A$ is
-not implemented yet.
+By default the program evaluates $F$ (the weighted bottleneck distance of
+the two slice barcodes, computed exactly) at every vertex of both strips and
+prints the maximum. That is a **lower bound** on the matching distance: the
+maximum of $F$ can lie off the $A_0$ vertices (see `ell` vs `span` in
+`tests/README.md`).
+
+With `--incremental`, the same maximum is computed by inserting the $A_0$
+segments one by one and coloring each face red or green, green meaning
+that an upper bound shows $F \le \Delta$ on the whole face ($\Delta$ the
+largest $F$ found so far). Green faces need no further evaluations. The
+default face bound combines the variation bound with the **bar-box bound**
+(`include/bar_box_bound.h`, explained in `notes/bar_box_bound/`), which
+needs no values of $F$ and is exact on plateaus.
+
+With `--distance`, a **local phase** follows: in each remaining red face,
+only a few linear functions can still realize a value of $F$ above
+$\Delta$, and the maximum of $F$ on the face can only lie where two of
+them meet on its boundary or three meet inside. $F$ is evaluated only
+there, so no line of $A$ is inserted. The result is the matching distance,
+or a lower bound if some red face had more candidate functions than
+`--max-candidates`. The argument for the local phase is written up in
+`notes/bar_box_bound/` but has not been independently checked yet.
 
 An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
 per face, using only the comparison lines of the current realizing pair.
@@ -154,7 +172,9 @@ Two files, one module each:
 | `--samples k` | With `--incremental`: evaluate $F$ at $k$ random $A_0$ vertices first, half per strip, at least one (default 50). |
 | `--seed n` | With `--incremental`: seed of the sampling and of the insertion order (default 1). |
 | `--no-skip` | With `--incremental`: also evaluate $F$ at vertices that a sample already covers. By default such a vertex gets the sample's bound $F(p) + 2(X\lvert s - s_p\rvert + \lvert t - t_p\rvert)$ instead, when that is at most Delta. |
-| `--bound b` | With `--incremental`: the face bound that decides whether a face turns green. `variation` (default): $F(c) + V_M(c) + V_N(c)$ with the exact push change of every grade between the corners, computed in interval arithmetic. `lipschitz`: $F(c) + 2\max_i(X\lvert s_i - s_c\rvert + \lvert t_i - t_c\rvert)$ with one constant $X$. |
+| `--bound b` | With `--incremental`: the face bound that decides whether a face turns green. `both` (default): `variation`, and `barbox` where that fails. `barbox`: the bar-box bound, which needs no values of $F$; decided in interval arithmetic and exactly where that is unsure. `variation`: $F(c) + V_M(c) + V_N(c)$ with the exact push change of every grade between the corners, computed in interval arithmetic. `lipschitz`: $F(c) + 2\max_i(X\lvert s_i - s_c\rvert + \lvert t_i - t_c\rvert)$ with one constant $X$. |
+| `--distance` | Compute the matching distance: `--incremental` followed by the local phase on the red faces. |
+| `--max-candidates k` | With `--distance`: skip red faces with more than $k$ candidate functions (default 500). The result is then only a lower bound, and play says so. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.
@@ -169,19 +189,22 @@ Flags may appear before or after the file names. Any other `--flag`
 
 `bench.py` (Python 3, standard library only) runs play on fixed sets of
 pairs. Every set checks or records what play prints: the number of $A_0$
-lines, the vertex, edge, and face counts, and the maximum of $F$ on the
-$A_0$ vertices. See `tests/README.md`.
+lines, the vertex, edge, and face counts, the maximum of $F$ on the $A_0$
+vertices, and with `--incremental` how many $F$ evaluations the pruning
+avoided. With `--distance` it also checks or records the matching distance.
+See `tests/README.md`.
 
 | Command | What it does |
 | --- | --- |
-| `./bench.py small` | Regression: exact $A_0$ counts and max $F$ (derived by hand) for small pairs, exit 1 on a mismatch (`--fast` skips the ~140-line cases) |
-| `./bench.py medium` | Larger pairs with known distances $d$, `--no-aida` by default, `--aida` for mpfree+AIDA. Checks max $F = d$ (synthetic pairs) or max $F \le d$, exit 1 otherwise. Prints Hera's value as a reference (`--no-hera` skips Hera) |
+| `./bench.py small` | Regression: exact $A_0$ counts and max $F$ (derived by hand) for small pairs, and with `--distance` the matching distance; exit 1 on a mismatch (`--fast` skips the ~140-line cases) |
+| `./bench.py medium` | Larger pairs with known distances $d$, `--no-aida` by default, `--aida` for mpfree+AIDA. Checks max $F = d$ (synthetic pairs) or max $F \le d$, and with `--distance` that the distance equals $d$; exit 1 otherwise. Prints Hera's value as a reference (`--no-hera` skips Hera) |
 | `./bench.py finite` | The 18 finite pairs of the old `tests/results.txt`, AIDA by default |
 | `./bench.py kerber` | Feasible pairs of Kerber's `data_benchmarks/small_instances` |
 | `./bench.py random` | Every pair of `tests/random_bifiltrations` |
 
 `--a0-only` (every set) skips $F$; `--incremental` (with `--samples`,
-`--seed`) uses the red/green insertion, which must give the same max $F$.
+`--seed`, `--bound`) uses the red/green insertion, which must give the same
+max $F$; `--distance` (with `--max-candidates`) adds the local phase.
 `./bench.py SET --help` lists the options of a set. `finite`, `kerber`, and
 `random` append one row per pair to a `*_a0.txt` file under `tests/` and
 resume where they stopped. They leave the old distance logs (`results.txt`,
@@ -202,7 +225,23 @@ Steep strip: 4 vertices, 5 edges, 3 faces
 Arrangement has 8 vertices, 10 edges, and 6 faces
 Max F on flat strip vertices:  1 (1)
 Max F on steep strip vertices: 1 (1)
+F evaluations: 8 (A0 has 8 vertices)
 Max F on A0 vertices: 1 (1)
+```
+
+With `--distance` (here on a pair whose maximum lies off the $A_0$ vertices):
+
+```plain
+$ ./play --no-aida tests/ell.scc tests/span.scc --distance
+...
+Incremental: 50 samples, seed 1, skipping covered vertices, variation and bar-box bound
+Flat strip:  25 samples, 6 evaluations, 1 skipped, 5 segments; final 7 vertices, 9 edges, 4 faces (2 red)
+Steep strip: 25 samples, 4 evaluations, 4 skipped, 5 segments; final 8 vertices, 11 edges, 5 faces (2 red)
+F evaluations: 60 (A0 has 15 vertices)
+Pruned: -300.0% of the A0 vertex evaluations avoided
+Max F on A0 vertices: 1 (1)
+Local phase: 2 red faces, 4 candidate functions (at most 3 in a face), 3 relevant lines, 3 candidate points, 0 certified without evaluating, 1 evaluations, 0 faces over the candidate limit
+Matching distance: 3/2 (1.5), exact
 ```
 
 - `Loaded` reports the number of summands per module (AIDA's indecomposables,
@@ -217,6 +256,16 @@ Max F on A0 vertices: 1 (1)
 - `F evaluations` is how often $F$ was evaluated: once per $A_0$ vertex by
   default, or the samples plus the vertices the red/green insertion
   reached with `--incremental`.
+- `Pruned` (incremental only) is the share of the $A_0$ vertex evaluations
+  that the pruning avoided, $1 - \text{evaluations} / |V(A_0)|$. It is
+  negative when the 50 samples cost more than they save, as on tiny inputs;
+  on the larger random and Kerber instances it is about 80--95\%.
+- `Local phase` (`--distance`): the red faces left after the insertion, the
+  candidate functions in them, the lines where two candidates are equal and
+  matter, the points where $F$ could exceed $\Delta$, how many of those the
+  bar-box test settled without evaluating $F$, and the $F$ evaluations.
+- `Matching distance` is exact, or a lower bound if a red face had more
+  candidates than `--max-candidates`.
 - `Max F on … vertices` is the largest $F$ over the vertices of the flat
   strip, the steep strip, and both. The value is exact (a fraction such as
   `51/2`), followed by a decimal in parentheses, or `inf` when the modules

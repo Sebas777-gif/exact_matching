@@ -3,6 +3,8 @@
 
 #include <iostream>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -130,6 +132,18 @@ void check_quadrilateral(const char* name, const Module& M, const Module& N,
   if (!ok) failures++;
 }
 
+void check(const char* name, bool ok, const std::string& got) {
+  std::cout << (ok ? "ok    " : "FAIL  ") << name << "\n  got:       " << got << "\n";
+  if (!ok) failures++;
+}
+
+std::string str(const std::optional<FT>& v) {
+  if (!v) return "inf";
+  std::ostringstream out;
+  out << CGAL::exact(*v);
+  return out.str();
+}
+
 }  // namespace
 
 int main() {
@@ -212,6 +226,55 @@ int main() {
     Presentation free_one = make_presentation({ {0, 0} }, {});
     check_quadrilateral("single grade (segment)", as_module(free_one), as_module(free_one),
                         2, 1, 1, 0);
+  }
+
+  // The bar-box bound on the worked example of notes/bar_box_bound: two
+  // generators at (0,0) and one relation, their sum, at (50,0) for M and at
+  // (0,50) for N. On the triangle T with corners (0,0), (1,0), (1,-50) of the
+  // flat strip, F = min(50 - w, 25) with w = 50 s + t, so sup_T F = 25 on a
+  // plateau. The variation bound gives 50 there; the bar-box bound is exact.
+  {
+    Presentation pm = make_presentation({ {0, 0}, {0, 0} }, { { {50, 0}, {0, 1} } });
+    Presentation pn = make_presentation({ {0, 0}, {0, 0} }, { { {0, 50}, {0, 1} } });
+    const BarBoxModule M = bar_box_module(as_module(pm)), N = bar_box_module(as_module(pn));
+    const std::vector<Point_2> T = { Point_2(0, 0), Point_2(1, 0), Point_2(1, -50) };
+    IntervalArithmetic arith;
+    std::vector<Interval> s, t;
+    bar_box_corners<IntervalArithmetic>(T, s, t);
+    const double U = bar_box_upper(bar_boxes(M, s, t, arith).boxes, bar_boxes(N, s, t, arith).boxes);
+    check("bar-box bound: worked example, upper bound 25", U == 25, std::to_string(U));
+    // Delta = 25 is a tie: decided exactly.
+    const bool green25 = bar_box_green(M, N, T, FT(25));
+    const bool green_below = bar_box_green(M, N, T, FT(25) - FT(1) / 1000);
+    check("bar-box bound: green at Delta = 25, red just below", green25 && !green_below,
+          std::string(green25 ? "green" : "red") + " / " + (green_below ? "green" : "red"));
+  }
+
+  // The whole algorithm with the local phase: matching distances.
+  {
+    IncrementalOptions options;
+    options.local_phase = true;
+    auto distance = [&](const Presentation& a, const Presentation& b) {
+      return incremental_max_F(as_module(a), as_module(b), options);
+    };
+    // Intervals [(0,0), (2,2)) and [(0,0), (1,1)): d = 1, attained at an A0 vertex.
+    IncrementalResult r1 = distance(make_presentation({ {0, 0} }, { { {2, 2}, {0} } }),
+                                    make_presentation({ {0, 0} }, { { {1, 1}, {0} } }));
+    check("distance: intervals", r1.distance && *r1.distance == 1 && r1.local.over_limit == 0,
+          str(r1.distance));
+    // The L of two intervals vs one interval: max F on the A0 vertices is 1,
+    // but d = 3/2 at (s, t) = (1, 1/2), on an edge of A0.
+    IncrementalResult r2 = distance(
+        make_presentation({ {1, 0}, {0, 2} }, { { {1, 2}, {0} }, { {3, 2}, {1} } }),
+        make_presentation({ {0, 0} }, { { {3, 2}, {0} } }));
+    check("distance: ell vs span (beyond the A0 vertices)",
+          r2.a0_max && *r2.a0_max == 1 && r2.distance && *r2.distance == FT(3) / 2
+              && r2.local.over_limit == 0,
+          "A0 " + str(r2.a0_max) + ", distance " + str(r2.distance));
+    // One vs two free generators: different numbers of infinite bars.
+    IncrementalResult r3 = distance(make_presentation({ {0, 0} }, {}),
+                                    make_presentation({ {0, 0}, {1, 1} }, {}));
+    check("distance: unmatched infinite bars", !r3.distance, str(r3.distance));
   }
 
   if (failures) std::cout << failures << " case(s) failed\n";

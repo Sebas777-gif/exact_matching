@@ -70,11 +70,18 @@ expected ones. Max $F$ is compared exactly, as a fraction. Every case uses
 skipped. With `--a0-only` only the four $A_0$ counts are checked. With
 `--incremental` the same expected values apply: the red/green insertion
 must find the same maximum, and the line also shows how many $F$
-evaluations it needed.
+evaluations it needed and how many it avoided ("pruned").
+
+With `--distance` each case must also give its matching distance $d$
+exactly (shown as `d=…`). The two `r_bif_v_10` cases are skipped there:
+without AIDA each module is one large summand, and the local phase takes
+minutes on them (they pass with AIDA in the medium set).
 
 ```bash
 ./bench.py small                     # all cases
 ./bench.py small --fast              # tiny cases only
+./bench.py small --incremental       # the red/green insertion
+./bench.py small --distance          # plus the matching distance
 ./bench.py small --play other/play   # or PLAY_BIN=other/play
 ```
 
@@ -141,16 +148,28 @@ change the slice barcodes, only the arrangement.
 ## Medium set
 
 `./bench.py medium` runs play on a larger set of pairs and prints a TSV
-summary (`name`, `known_dist`, `a0_lines`, `vertices`, `edges`, `faces`,
-`max_F`, `max_F_decimal`, `seconds`, `status`, `hera`, `hera_seconds`). A case passes when
-play exits cleanly and max $F$ on the $A_0$ vertices passes its check
-against the known distance $d$:
+summary (`name`, `known_dist`, the play columns of the results files below,
+`seconds`, `status`, `hera`, `hera_seconds`). A case passes when play exits
+cleanly and max $F$ on the $A_0$ vertices passes its check against the
+known distance $d$:
 
 - **Synthetic pairs** (`far_merge*`, `merge_*`): max $F = d$. The arguments
   are the ones of the corresponding small cases; the extra short bars of the
   `.bif` versions used with `--aida` cost at most 1/2.
 - **`v10` pairs:** max $F \le d$, since $F \le d$ on every slice. Nothing
   more is known by hand.
+
+With `--distance`, the matching distance must also equal $d$. If play
+reports only a lower bound (a red face had more candidate functions than
+`--max-candidates`), the lower bound must lie between max $F$ and $d$.
+Without AIDA the `v10` pairs are skipped (one large summand per module;
+too slow). With `--aida --distance` all seven `v10` pairs reach $d$
+exactly; the three `merge_*` pairs give only a lower bound, because their
+large red faces have thousands of candidate functions.
+
+```bash
+./bench.py medium --aida --distance --no-hera
+```
 
 The script exits with 1 if a case fails. Hera's `matching_dist` value (on
 the matching `.bif` files; `--hera PATH` or `HERA_BIN` if set, otherwise
@@ -244,14 +263,24 @@ a reference. The old `tests/results.txt` is not touched. `--no-aida` and
 | `random` | `tests/results_a0.txt` |
 | `kerber` | `tests/small_instance_results_a0.txt` |
 
-Columns: `file_a`, `file_b`, `a0_lines`, `vertices`, `edges`, `faces`,
-`max_F` (exact, as play prints it), `max_F_decimal` (play's decimal; the
-exact fractions get long when the input grades are decimals, as in
-Kerber's files), `evaluations` (number of $F$ evaluations), `seconds`, and
-for `finite` and `random` also `hera_distance` and `hera_seconds`. These
-three columns are empty with `--a0-only`. The method (all vertices, or
-`--incremental` with its samples and seed) is part of the settings, so a
-results file never mixes the two.
+Columns:
+
+| Column | Content |
+| --- | --- |
+| `file_a`, `file_b` | the pair |
+| `a0_lines`, `vertices`, `edges`, `faces` | $A_0$ counts |
+| `max_F`, `max_F_decimal` | max $F$ on the $A_0$ vertices, exact (as play prints it) and as a decimal (the fractions get long when the input grades are decimals, as in Kerber's files) |
+| `evaluations` | $F$ evaluations for that maximum |
+| `pruned_pct` | with `--incremental` or `--distance`: share of the $A_0$ vertex evaluations avoided, in percent (negative if the samples cost more than they saved) |
+| `distance`, `distance_decimal`, `distance_status` | with `--distance`: the matching distance, and `exact` or `lower bound` |
+| `local_evaluations` | with `--distance`: $F$ evaluations of the local phase |
+| `seconds` | play's running time |
+| `hera_distance`, `hera_seconds` | `finite` and `random` only |
+
+The play columns are empty with `--a0-only`, apart from the $A_0$ counts.
+The method (all vertices, or `--incremental`/`--distance` with samples,
+seed, bound and candidate limit) is part of the settings, so a results file
+never mixes methods.
 
 `--results PATH` writes elsewhere. The `#` lines at the top record the
 settings, including whether `max_F` was evaluated. Each pair's row is appended as soon as the pair is done, so

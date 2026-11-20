@@ -8,15 +8,19 @@
 //
 // The arrangement starts as the quadrilateral that contains every dual
 // segment of the strip (see build_initial_quadrilateral).
+//
+// After all segments are inserted, the red faces are the only places where F
+// can exceed the maximum over the A0 vertices. The local phase (local_phase,
+// at the end of this file) examines them and gives the matching distance.
 
 #include <CGAL/Arr_extended_dcel.h>
 #include <CGAL/Arr_observer.h>
-#include <CGAL/Interval_nt.h>
 
 #include <limits>
-
+#include <map>
 #include <random>
 
+#include <bar_box_bound.h>
 #include <matching_distance.h>
 
 namespace matching {
@@ -115,7 +119,9 @@ inline std::size_t build_initial_quadrilateral(Colored_arrangement& arr,
 //              all grades (face_upper_bound_lipschitz)
 //   variation  F(c) + V_M(c) + V_N(c), with the exact push change of every
 //              grade between the corners (face_upper_bound_variation)
-enum class FaceBound { lipschitz, variation };
+//   barbox     the bar-box bound (bar_box_bound.h), which needs no values of F
+//   both       variation first (cheap), then barbox
+enum class FaceBound { lipschitz, variation, barbox, both };
 
 // The distinct grades of one module (generators and relations of all
 // summands).
@@ -129,9 +135,7 @@ inline std::vector<Grade2> module_grades(const Module& M) {
 }
 
 // Grades in interval arithmetic for the variation bound (see
-// face_upper_bound_variation).
-typedef CGAL::Interval_nt<true> Interval;
-
+// face_upper_bound_variation). Interval is defined in bar_box_bound.h.
 // A grade with interval coordinates, converted once per strip.
 struct IntervalGrade {
   Interval x, y;
@@ -198,11 +202,12 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   // bound selects the face bound that insert_segment uses.
   Coloring_observer(Colored_arrangement& arr, const Module& M, const Module& N, FT& delta,
                     const std::vector<Sample>* samples = nullptr,
-                    FaceBound bound = FaceBound::variation)
+                    FaceBound bound = FaceBound::both)
       : CGAL::Arr_observer<Colored_arrangement>(arr), M_(M), N_(N), delta_(delta),
         max_x_(max_abs_x(M, N)), samples_(samples), bound_(bound),
         grades_M_(interval_grades(module_grades(M))),
-        grades_N_(interval_grades(module_grades(N))) {}
+        grades_N_(interval_grades(module_grades(N))),
+        bar_box_M_(bar_box_module(M)), bar_box_N_(bar_box_module(N)) {}
 
   // X of the Lipschitz bound for this strip (see max_abs_x).
   const FT& max_x() const { return max_x_; }
@@ -210,6 +215,9 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   // The distinct grades of each module, as intervals, for the variation bound.
   const std::vector<IntervalGrade>& interval_grades_M() const { return grades_M_; }
   const std::vector<IntervalGrade>& interval_grades_N() const { return grades_N_; }
+  // The summands of each module, for the bar-box bound.
+  const BarBoxModule& bar_box_M() const { return bar_box_M_; }
+  const BarBoxModule& bar_box_N() const { return bar_box_N_; }
 
   // Called before face f is split by the new edge e. f still has its color.
   // e->source()->point() and e->target()->point() are the two points (s, t)
@@ -271,7 +279,20 @@ class Coloring_observer : public CGAL::Arr_observer<Colored_arrangement> {
   const std::vector<Sample>* samples_;  // samples of this strip, or nullptr
   FaceBound bound_;
   std::vector<IntervalGrade> grades_M_, grades_N_;
+  BarBoxModule bar_box_M_, bar_box_N_;
 };
+
+// The corners of a bounded face, counterclockwise.
+template <class FaceHandle>
+std::vector<Point_2> face_corners(FaceHandle f) {
+  std::vector<Point_2> corners;
+  auto he = f->outer_ccb();
+  auto first = he;
+  do {
+    corners.push_back(he->target()->point());
+  } while (++he != first);
+  return corners;
+}
 
 inline FT face_upper_bound_lipschitz(Colored_arrangement::Face_handle f, const FT& max_x) {
   // All corners of a bounded face f, in counterclockwise order.
@@ -412,12 +433,21 @@ inline double face_upper_bound_variation(Colored_arrangement::Face_handle f,
 // the observer. The variation bound is an interval upper end, so it is
 // compared with the lower end of delta: rounding can only make a face stay
 // red, never wrongly turn green.
+//
+// The bar-box bound decides exactly where interval arithmetic is unsure
+// (bar_box_green), because on plateaus it often equals delta exactly.
 inline bool face_is_green(Colored_arrangement::Face_handle f, const Coloring_observer& obs,
                           const FT& delta) {
-  if (obs.bound() == FaceBound::lipschitz)
+  const FaceBound bound = obs.bound();
+  if (bound == FaceBound::lipschitz)
     return face_upper_bound_lipschitz(f, obs.max_x()) <= delta;
-  return face_upper_bound_variation(f, obs.interval_grades_M(), obs.interval_grades_N())
-      <= CGAL::to_interval(delta).first;
+  if (bound == FaceBound::variation || bound == FaceBound::both) {
+    if (face_upper_bound_variation(f, obs.interval_grades_M(), obs.interval_grades_N())
+        <= CGAL::to_interval(delta).first)
+      return true;
+    if (bound == FaceBound::variation) return false;
+  }
+  return bar_box_green(obs.bar_box_M(), obs.bar_box_N(), face_corners(f), delta);
 }
 
 // Inserts one segment, then restores the invariant: no yellow faces, and
@@ -515,15 +545,16 @@ inline bool sample_delta(const Module& M, const Module& N, std::size_t k, std::m
 // Inserts the dual segments of the strip of (M, N) in random order into the
 // initial quadrilateral, with red/green coloring, and raises delta. With
 // samples, vertices covered by a sample are not evaluated (see
-// Coloring_observer).
-inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT& delta,
-                         StripStats& stats, const std::vector<Sample>* samples = nullptr,
-                         FaceBound bound = FaceBound::variation) {
-  Colored_arrangement arr;
+// Coloring_observer). arr must be empty; afterwards it holds the colored
+// arrangement, whose red faces the local phase examines.
+inline void insert_strip(Colored_arrangement& arr, const Module& M, const Module& N,
+                         std::mt19937& rng, FT& delta, StripStats& stats,
+                         const std::vector<Sample>* samples = nullptr,
+                         FaceBound bound = FaceBound::both) {
   build_initial_quadrilateral(arr, M, N, delta);
   stats.evaluations = arr.number_of_vertices();  // the corners
 
-  // Declared after arr, so it is destroyed (and detached) before arr.
+  // Detached again when insert_strip returns; arr stays.
   Coloring_observer obs(arr, M, N, delta, samples, bound);
 
   std::set<Grade2> grades;
@@ -543,30 +574,406 @@ inline void insert_strip(const Module& M, const Module& N, std::mt19937& rng, FT
     if (f->data() == Color::red) ++stats.red_faces;
 }
 
+// --- Local phase: beyond the A0 vertices -------------------------------------
+//
+// After all A0 segments are inserted, every red face lies inside one face of
+// A0, so every push is linear on it: v_y if v lies on or above the slices of
+// the face, s v_x + t otherwise. At every slice, F then equals one of finitely
+// many linear functions (KLO): the difference of two births or of two deaths
+// of the two modules, or half a bar length within one module.
+//
+// Let Delta be the largest F found so far and U an upper bound on F over the
+// red face f (the bar-box bound). Only functions that can realize a value in
+// (Delta, U] on f matter, and the bar-box classes restrict which grades can
+// form them ("candidates"). F is continuous and piecewise linear on f, with
+// pieces given by the candidates where F > Delta. So if the maximum of F on
+// f exceeds Delta, it is attained
+//   - at a corner of f (already evaluated),
+//   - where two candidates are equal on the boundary of f, or
+//   - where three candidates are equal inside f.
+// The local phase evaluates F exactly at those points, best candidate value
+// first, and raises Delta. No line of the refined arrangement A is inserted.
+//
+// This argument is in notes/bar_box_bound; it still needs independent
+// checking. A face with more than max_candidates candidates is skipped, and
+// the result is then only a lower bound (LocalStats::over_limit > 0).
+
+struct LocalStats {
+  std::size_t red_faces = 0;    // red faces that the bar-box bound could not turn green
+  std::size_t candidates = 0;   // candidate functions, summed over those faces
+  std::size_t largest = 0;      // most candidates in one face
+  std::size_t lines = 0;        // pairs of candidates whose equality line matters in a face
+  std::size_t points = 0;       // points where F was a candidate for evaluation
+  std::size_t evaluations = 0;  // F evaluations
+  std::size_t certified = 0;    // points shown F <= Delta by the bar-box test, not evaluated
+  std::size_t over_limit = 0;   // faces skipped: more than max_candidates candidates
+};
+
+// A linear function a s + b t + c of the slice (s, t).
+struct Linear {
+  FT a, b, c;
+  FT at(const Point_2& p) const { return a * p.x() + b * p.y() + c; }
+};
+
+inline bool operator<(const Linear& x, const Linear& y) {
+  if (x.a != y.a) return x.a < y.a;
+  if (x.b != y.b) return x.b < y.b;
+  return x.c < y.c;
+}
+
+inline Linear operator-(const Linear& x, const Linear& y) { return {x.a - y.a, x.b - y.b, x.c - y.c}; }
+
+// The same in interval arithmetic, for cheap tests before exact ones.
+struct LinearI {
+  Interval a, b, c;
+  explicit LinearI(const Linear& l)
+      : a(CGAL::to_interval(l.a)), b(CGAL::to_interval(l.b)), c(CGAL::to_interval(l.c)) {}
+  LinearI(Interval a_, Interval b_, Interval c_) : a(a_), b(b_), c(c_) {}
+  Interval at(const Interval& s, const Interval& t) const { return a * s + b * t + c; }
+};
+
+inline LinearI operator-(const LinearI& x, const LinearI& y) {
+  return LinearI(x.a - y.a, x.b - y.b, x.c - y.c);
+}
+
+// The push of v on a face of A0, as a linear function. mid is a point inside
+// the face; no dual line crosses the inside of an A0 face.
+inline Linear push_on_face(const Grade2& v, const Point_2& mid) {
+  if (v.y >= mid.x() * v.x + mid.y()) return {FT(0), FT(0), v.y};
+  return {v.x, FT(1), FT(0)};
+}
+
+struct PointLess {
+  bool operator()(const Point_2& p, const Point_2& q) const {
+    return CGAL::compare_xy(p, q) == CGAL::SMALLER;
+  }
+};
+
+namespace detail {
+
+// The candidate functions of a red face with corners `corners`: every
+// function that the bar-box classes allow and that can take a value in
+// (delta, U] somewhere on the face.
+inline std::vector<Linear> local_candidates(const BarBoxModule& M, const BarBoxModule& N,
+                                            const BarBoxes<Interval>& X, const BarBoxes<Interval>& Y,
+                                            const std::vector<Point_2>& corners,
+                                            const Point_2& mid, const FT& delta, double U) {
+  IntervalArithmetic arith;  // only for "may exceed delta" tests; uncertainty keeps a function
+  const Interval delta_i = IntervalArithmetic::from(delta);
+  std::vector<Interval> s, t;
+  bar_box_corners<IntervalArithmetic>(corners, s, t);
+  std::map<Linear, char> found;
+
+  // Keeps e if it can take a value in (delta, cap] on the face, cap <= U.
+  auto add = [&](const Linear& e, double cap) {
+    const LinearI ei(e);
+    double hi = -std::numeric_limits<double>::infinity(), lo = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < s.size(); i++) {
+      const Interval v = ei.at(s[i], t[i]);
+      hi = std::max(hi, v.sup());
+      lo = std::min(lo, v.inf());
+    }
+    // On the face, e is linear, so its extremes are at corners.
+    if (hi > delta_i.inf() && lo <= std::min(U, cap)) found.emplace(e, 0);
+  };
+  auto unique_boxes = [](const BarBoxes<Interval>& B) {
+    std::vector<const BarBox<Interval>*> out;
+    std::set<std::tuple<std::size_t, int, int> > seen;
+    for (const auto& b : B.boxes)
+      if (seen.insert(std::make_tuple(b.summand, b.gen_class, b.rel_class)).second) out.push_back(&b);
+    return out;
+  };
+  const auto UX = unique_boxes(X), UY = unique_boxes(Y);
+
+  // Half bar lengths within one module.
+  auto half_lengths = [&](const BarBoxModule& mod, const BarBoxes<Interval>& B,
+                          const std::vector<const BarBox<Interval>*>& boxes) {
+    for (const BarBox<Interval>* b : boxes) {
+      if (b->essential || arith.le(bar_box_diag<IntervalArithmetic>(*b), delta_i)) continue;
+      const BarBoxSummand& q = mod[b->summand];
+      for (int g : B.gen_members[b->summand][b->gen_class])
+        for (int r : B.rel_members[b->summand][b->rel_class]) {
+          const Linear d = push_on_face(q.rels[r], mid) - push_on_face(q.gens[g], mid);
+          add(Linear{d.a / 2, d.b / 2, d.c / 2}, U);
+        }
+    }
+  };
+  half_lengths(M, X, UX);
+  half_lengths(N, Y, UY);
+
+  // Differences of births, or of deaths, across the modules (both signs).
+  //
+  // There is always an optimal matching in which every matched pair costs
+  // at most the larger half length of its two bars: otherwise sending both
+  // bars to the diagonal is cheaper. So a matched pair that realizes F > delta
+  // has a bar of half length > delta, and one of its boxes is forced (diag
+  // may exceed delta). Pairs of two short bars are left out, and the value of
+  // a pair is at most cap = max(diag(x), diag(y)) (infinite for essential bars).
+  auto forced = [&](const BarBox<Interval>* b) {
+    return b->essential || !arith.le(bar_box_diag<IntervalArithmetic>(*b), delta_i);
+  };
+  for (const BarBox<Interval>* x : UX)
+    for (const BarBox<Interval>* y : UY) {
+      if (x->essential != y->essential) continue;
+      if (!forced(x) && !forced(y)) continue;
+      if (arith.le(bar_box_cost<IntervalArithmetic>(*x, *y), delta_i)) continue;
+      const double cap = x->essential ? std::numeric_limits<double>::infinity()
+          : std::max(bar_box_diag<IntervalArithmetic>(*x).sup(),
+                     bar_box_diag<IntervalArithmetic>(*y).sup());
+      const BarBoxSummand& qx = M[x->summand];
+      const BarBoxSummand& qy = N[y->summand];
+      for (int g : X.gen_members[x->summand][x->gen_class])
+        for (int h : Y.gen_members[y->summand][y->gen_class]) {
+          const Linear e = push_on_face(qx.gens[g], mid) - push_on_face(qy.gens[h], mid);
+          add(e, cap);
+          add(Linear{-e.a, -e.b, -e.c}, cap);
+        }
+      if (x->essential) continue;
+      for (int r : X.rel_members[x->summand][x->rel_class])
+        for (int q : Y.rel_members[y->summand][y->rel_class]) {
+          const Linear e = push_on_face(qx.rels[r], mid) - push_on_face(qy.rels[q], mid);
+          add(e, cap);
+          add(Linear{-e.a, -e.b, -e.c}, cap);
+        }
+    }
+
+  std::vector<Linear> out;
+  for (const auto& kv : found) out.push_back(kv.first);
+  return out;
+}
+
+}  // namespace detail
+
+// Examines the red faces of a strip's colored arrangement (after
+// insert_strip) and raises delta to the maximum of F over them. M and N are
+// the strip's modules (swapped for the steep strip). `evaluated` collects the
+// points where F was evaluated, so a point shared by two faces is evaluated once.
+inline void local_phase(const Colored_arrangement& arr, const Module& M, const Module& N,
+                        FT& delta, std::size_t max_candidates, LocalStats& stats) {
+  const BarBoxModule MB = bar_box_module(M), NB = bar_box_module(N);
+  std::set<Point_2, PointLess> evaluated;
+
+  for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f) {
+    if (f->is_unbounded() || f->data() != Color::red) continue;
+    const std::vector<Point_2> corners = face_corners(f);
+    if (bar_box_green(MB, NB, corners, delta)) continue;  // delta may have grown
+    ++stats.red_faces;
+    const std::size_t k = corners.size();
+
+    IntervalArithmetic arith;
+    std::vector<Interval> si, ti;
+    bar_box_corners<IntervalArithmetic>(corners, si, ti);
+    const BarBoxes<Interval> X = bar_boxes(MB, si, ti, arith), Y = bar_boxes(NB, si, ti, arith);
+    const double U = bar_box_upper(X.boxes, Y.boxes);
+    const bool bounded = U < std::numeric_limits<double>::infinity();
+    const FT U_exact = bounded ? FT(U) : FT(0);
+
+    FT ms(0), mt(0);
+    for (const Point_2& c : corners) {
+      ms += c.x();
+      mt += c.y();
+    }
+    const Point_2 mid(ms / static_cast<int>(k), mt / static_cast<int>(k));
+
+    const std::vector<Linear> E = detail::local_candidates(MB, NB, X, Y, corners, mid, delta, U);
+    const std::size_t m = E.size();
+    stats.candidates += m;
+    stats.largest = std::max(stats.largest, m);
+    if (m > max_candidates) {
+      ++stats.over_limit;
+      continue;
+    }
+    std::vector<LinearI> EI;
+    for (const Linear& e : E) EI.push_back(LinearI(e));
+
+    // Points where F might exceed delta, with the candidate value there.
+    std::vector<std::pair<FT, Point_2> > points;
+    auto in_window = [&](const FT& v) { return v > delta && (!bounded || v <= U_exact); };
+    const Interval delta_i = IntervalArithmetic::from(delta);
+    auto may_window = [&](double sup, double inf) { return sup > delta_i.inf() && inf <= U; };
+
+    // 1. Lines e_i = e_j that cross the face where the common value can lie
+    //    in the window. Their boundary points are candidates.
+    struct Line {
+      std::size_t i, j;
+    };
+    std::vector<Line> lines;
+    std::vector<std::vector<std::size_t> > through(m);  // lines through each function
+    for (std::size_t i = 0; i < m; i++)
+      for (std::size_t j = i + 1; j < m; j++) {
+        const LinearI LI = EI[i] - EI[j];
+        std::vector<Interval> v(k);
+        bool maybe_pos = false, maybe_neg = false;
+        for (std::size_t q = 0; q < k; q++) {
+          v[q] = LI.at(si[q], ti[q]);
+          maybe_pos = maybe_pos || v[q].sup() > 0;
+          maybe_neg = maybe_neg || v[q].inf() < 0;
+        }
+        if (!maybe_pos || !maybe_neg) continue;
+        // Range of e_i over the possible crossing points.
+        double hi = -std::numeric_limits<double>::infinity(), lo = std::numeric_limits<double>::infinity();
+        bool unsure = false;
+        for (std::size_t q = 0; q < k; q++) {
+          const std::size_t r = (q + 1) % k;
+          if ((v[q].inf() > 0 && v[r].inf() > 0) || (v[q].sup() < 0 && v[r].sup() < 0)) continue;
+          const Interval den = v[q] - v[r];
+          if (den.inf() <= 0 && den.sup() >= 0) {
+            unsure = true;
+            continue;
+          }
+          const Interval w = v[q] / den;
+          const Interval val = EI[i].at(si[q] + w * (si[r] - si[q]), ti[q] + w * (ti[r] - ti[q]));
+          hi = std::max(hi, val.sup());
+          lo = std::min(lo, val.inf());
+        }
+        if (!unsure && !may_window(hi, lo)) continue;
+
+        // Exact: the segment of the line inside the face.
+        const Linear L = E[i] - E[j];
+        std::vector<FT> ve(k);
+        bool pos = false, neg = false;
+        for (std::size_t q = 0; q < k; q++) {
+          ve[q] = L.at(corners[q]);
+          pos = pos || ve[q] > 0;
+          neg = neg || ve[q] < 0;
+        }
+        if (!pos || !neg) continue;
+        std::vector<Point_2> ends;
+        for (std::size_t q = 0; q < k; q++) {
+          const std::size_t r = (q + 1) % k;
+          if (ve[q] == 0) {
+            ends.push_back(corners[q]);
+          } else if ((ve[q] > 0 && ve[r] < 0) || (ve[q] < 0 && ve[r] > 0)) {
+            const FT w = ve[q] / (ve[q] - ve[r]);
+            ends.push_back(Point_2(corners[q].x() + w * (corners[r].x() - corners[q].x()),
+                                   corners[q].y() + w * (corners[r].y() - corners[q].y())));
+          }
+        }
+        if (ends.size() != 2) continue;  // a convex face meets a crossing line in a segment
+        const FT a = E[i].at(ends[0]), b = E[i].at(ends[1]);
+        if (!(std::max(a, b) > delta && (!bounded || std::min(a, b) <= U_exact))) continue;
+        through[i].push_back(lines.size());
+        through[j].push_back(lines.size());
+        lines.push_back(Line{i, j});
+        if (in_window(a)) points.push_back({a, ends[0]});
+        if (in_window(b)) points.push_back({b, ends[1]});
+      }
+    stats.lines += lines.size();
+
+    // 2. Points inside the face where three candidates e_i = e_j = e_k agree:
+    //    intersections of two lines through the same function.
+    for (std::size_t i = 0; i < m; i++)
+      for (std::size_t x = 0; x < through[i].size(); x++)
+        for (std::size_t y = x + 1; y < through[i].size(); y++) {
+          const Line& l1 = lines[through[i][x]];
+          const Line& l2 = lines[through[i][y]];
+          const std::size_t j = l1.i == i ? l1.j : l1.i, h = l2.i == i ? l2.j : l2.i;
+          if (j == h) continue;
+          const LinearI A1 = EI[i] - EI[j], A2 = EI[i] - EI[h];
+          const Interval det = A1.a * A2.b - A1.b * A2.a;
+          if (det.inf() > 0 || det.sup() < 0) {
+            const Interval ps = (A1.b * A2.c - A2.b * A1.c) / det;
+            const Interval pt = (A2.a * A1.c - A1.a * A2.c) / det;
+            bool maybe_inside = true;
+            for (std::size_t q = 0; q < k && maybe_inside; q++) {
+              const std::size_t r = (q + 1) % k;
+              const Interval cross = (si[r] - si[q]) * (pt - ti[q]) - (ti[r] - ti[q]) * (ps - si[q]);
+              maybe_inside = cross.sup() >= 0;
+            }
+            const Interval val = EI[i].at(ps, pt);
+            if (!maybe_inside || !may_window(val.sup(), val.inf())) continue;
+          }
+          const Linear B1 = E[i] - E[j], B2 = E[i] - E[h];
+          const FT d = B1.a * B2.b - B1.b * B2.a;
+          if (d == 0) continue;  // parallel or the same line: covered by its ends
+          const Point_2 p((B1.b * B2.c - B2.b * B1.c) / d, (B2.a * B1.c - B1.a * B2.c) / d);
+          bool inside = true;
+          for (std::size_t q = 0; q < k && inside; q++) {
+            const std::size_t r = (q + 1) % k;
+            inside = CGAL::orientation(corners[q], corners[r], p) != CGAL::RIGHT_TURN;
+          }
+          if (!inside) continue;
+          const FT val = E[i].at(p);
+          if (in_window(val)) points.push_back({val, p});
+        }
+    stats.points += points.size();
+
+    // 3. Evaluate, best candidate value first. F at a point can only exceed
+    //    delta if its candidate value does. At a single point the bar-box
+    //    boxes are the bars themselves, so its test is a cheap exact check
+    //    of F <= delta; only points it cannot certify are evaluated.
+    std::sort(points.begin(), points.end(),
+              [](const std::pair<FT, Point_2>& x, const std::pair<FT, Point_2>& y) {
+                return x.first > y.first;
+              });
+    for (const auto& vp : points) {
+      if (!(vp.first > delta)) break;
+      if (!evaluated.insert(vp.second).second) continue;
+      if (bar_box_green(MB, NB, std::vector<Point_2>{vp.second}, delta)) {
+        ++stats.certified;
+        continue;
+      }
+      const std::optional<FT> value = F(M, N, vp.second.x(), vp.second.y());
+      ++stats.evaluations;
+      assert(value);  // F is finite (checked before)
+      if (*value > delta) delta = *value;
+    }
+  }
+}
+
+// --- The whole algorithm ------------------------------------------------------
+
+struct IncrementalOptions {
+  std::size_t samples = 50;            // random A0 vertices evaluated first (half per strip, at least one)
+  unsigned seed = 1;                   // of the sampling and of the insertion order
+  bool skip_covered = true;            // do not evaluate vertices covered by a sample
+  FaceBound bound = FaceBound::both;   // face bound of the insertion
+  bool local_phase = false;            // go beyond the A0 vertices: the matching distance
+  std::size_t max_candidates = 500;    // local phase: skip faces with more candidates
+};
+
+struct IncrementalResult {
+  // Maximum of F over the A0 vertices; std::nullopt means infinity.
+  std::optional<FT> a0_max;
+  // With local_phase: the matching distance, or only a lower bound if
+  // local.over_limit > 0. Equal to a0_max otherwise.
+  std::optional<FT> distance;
+  StripStats flat, steep;
+  LocalStats local;
+};
+
 // The maximum of F over the A0 vertices of both strips, computed with the
-// red/green insertion. Returns std::nullopt (infinity) if the modules have
-// different numbers of infinite bars. First evaluates F at `samples` random
-// A0 vertices (half per strip, at least one) for a good starting Delta,
-// then inserts the segments of the flat and then the steep strip. Delta is
-// shared by both. With skip_covered, vertices covered by a sample are not
-// evaluated. The result equals max_F_on_vertices over both strips.
-inline std::optional<FT> incremental_max_F(const Module& M, const Module& N,
-                                           std::size_t samples, unsigned seed,
-                                           StripStats& flat, StripStats& steep,
-                                           bool skip_covered = true,
-                                           FaceBound bound = FaceBound::variation) {
+// red/green insertion, and with options.local_phase the matching distance.
+// Infinite (std::nullopt) if the modules have different numbers of infinite
+// bars. First evaluates F at random A0 vertices for a good starting Delta,
+// then inserts the segments of the flat and then the steep strip; Delta is
+// shared by both. The A0 result equals max_F_on_vertices over both strips.
+inline IncrementalResult incremental_max_F(const Module& M, const Module& N,
+                                           const IncrementalOptions& options = IncrementalOptions()) {
+  IncrementalResult result;
   const Module M_swap = swapped_module(M), N_swap = swapped_module(N);
-  std::mt19937 rng(seed);
+  std::mt19937 rng(options.seed);
   FT delta(0);
   // The first sample also decides whether F is infinite (everywhere).
   std::vector<Sample> flat_samples, steep_samples;
-  if (!sample_delta(M, N, std::max<std::size_t>(1, (samples + 1) / 2), rng, delta,
-                    flat_samples, flat))
-    return std::nullopt;
-  sample_delta(M_swap, N_swap, samples / 2, rng, delta, steep_samples, steep);
-  insert_strip(M, N, rng, delta, flat, skip_covered ? &flat_samples : nullptr, bound);
-  insert_strip(M_swap, N_swap, rng, delta, steep, skip_covered ? &steep_samples : nullptr, bound);
-  return delta;
+  if (!sample_delta(M, N, std::max<std::size_t>(1, (options.samples + 1) / 2), rng, delta,
+                    flat_samples, result.flat))
+    return result;
+  sample_delta(M_swap, N_swap, options.samples / 2, rng, delta, steep_samples, result.steep);
+
+  Colored_arrangement flat, steep;
+  insert_strip(flat, M, N, rng, delta, result.flat,
+               options.skip_covered ? &flat_samples : nullptr, options.bound);
+  insert_strip(steep, M_swap, N_swap, rng, delta, result.steep,
+               options.skip_covered ? &steep_samples : nullptr, options.bound);
+  result.a0_max = delta;
+
+  if (options.local_phase) {
+    local_phase(flat, M, N, delta, options.max_candidates, result.local);
+    local_phase(steep, M_swap, N_swap, delta, options.max_candidates, result.local);
+  }
+  result.distance = delta;
+  return result;
 }
 
 }  // namespace matching
