@@ -32,8 +32,8 @@ segments one by one and coloring each face red or green, green meaning
 that an upper bound shows $F \le \Delta$ on the whole face ($\Delta$ the
 largest $F$ found so far). Green faces need no further evaluations. The
 default face bound combines the variation bound with the **bar-box bound**
-(`include/bar_box_bound.h`, explained in `notes/bar_box_bound/`), which
-needs no values of $F$ and is exact on plateaus.
+(`include/bar_box_bound.h`), which needs no values of $F$ and is exact on
+plateaus.
 
 With `--distance`, a **local phase** follows: in each remaining red face,
 only a few linear functions can still realize a value of $F$ above
