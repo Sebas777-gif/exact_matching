@@ -41,8 +41,8 @@ $\Delta$, and the maximum of $F$ on the face can only lie where two of
 them meet on its boundary or three meet inside. $F$ is evaluated only
 there, so no line of $A$ is inserted. The result is the matching distance,
 or a lower bound if some red face had more candidate functions than
-`--max-candidates`. The argument for the local phase is written up in
-`notes/bar_box_bound/` but has not been independently checked yet.
+`--max-candidates`. The argument for the local phase still needs to be
+independently verified.
 
 An earlier version also evaluated $F$ on $A_0$ and refined it towards $A$
 per face, using only the comparison lines of the current realizing pair.
