@@ -271,6 +271,20 @@ int main() {
           r2.a0_max && *r2.a0_max == 1 && r2.distance && *r2.distance == FT(3) / 2
               && r2.local.over_limit == 0,
           "A0 " + str(r2.a0_max) + ", distance " + str(r2.distance));
+    // The same pair with at most 2 candidates per face: its faces are split.
+    // The pieces around the maximum keep 2 or more candidates, so the result
+    // is a lower bound, but it must still reach 3/2 and not exceed it.
+    {
+      IncrementalOptions split = options;
+      split.max_candidates = 2;
+      split.split_depth = 3;
+      IncrementalResult r = incremental_max_F(
+          as_module(make_presentation({ {1, 0}, {0, 2} }, { { {1, 2}, {0} }, { {3, 2}, {1} } })),
+          as_module(make_presentation({ {0, 0} }, { { {3, 2}, {0} } })), split);
+      check("distance: ell vs span with split faces", r.distance && *r.distance == FT(3) / 2
+                && r.local.splits > 0,
+            str(r.distance) + ", " + std::to_string(r.local.splits) + " splits");
+    }
     // One vs two free generators: different numbers of infinite bars.
     IncrementalResult r3 = distance(make_presentation({ {0, 0} }, {}),
                                     make_presentation({ {0, 0}, {1, 1} }, {}));

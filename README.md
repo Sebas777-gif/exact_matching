@@ -175,6 +175,7 @@ Two files, one module each:
 | `--bound b` | With `--incremental`: the face bound that decides whether a face turns green. `both` (default): `variation`, and `barbox` where that fails. `barbox`: the bar-box bound, which needs no values of $F$; decided in interval arithmetic and exactly where that is unsure. `variation`: $F(c) + V_M(c) + V_N(c)$ with the exact push change of every grade between the corners, computed in interval arithmetic. `lipschitz`: $F(c) + 2\max_i(X\lvert s_i - s_c\rvert + \lvert t_i - t_c\rvert)$ with one constant $X$. |
 | `--distance` | Compute the matching distance: `--incremental` followed by the local phase on the red faces. |
 | `--max-candidates k` | With `--distance`: skip red faces with more than $k$ candidate functions (default 500). The result is then only a lower bound, and play says so. |
+| `--split-depth d` | With `--distance`: cut such a face in two, and the pieces again, up to $d$ times, before giving up on it (default 0: no splitting). Smaller pieces have shorter push ranges and fewer candidates. A depth of 8 turns the lower bounds of the `full_rips` and `merge_*` test pairs into exact distances. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.

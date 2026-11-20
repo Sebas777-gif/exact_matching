@@ -254,7 +254,8 @@ def run_play(args, files, dim=None):
             cmd.append("--no-skip")
         cmd += ["--bound", args.bound]
         if args.distance:
-            cmd += ["--distance", "--max-candidates", str(args.max_candidates)]
+            cmd += ["--distance", "--max-candidates", str(args.max_candidates),
+                    "--split-depth", str(args.split_depth)]
     return run(cmd, args.timeout)
 
 
@@ -583,7 +584,8 @@ def method(args):
         skip = "no skipping" if args.no_skip else "skipping covered vertices"
         text = f"incremental, {args.samples} samples, seed {args.seed}, {skip}, {args.bound} bound"
         if args.distance:
-            text += f", local phase (at most {args.max_candidates} candidates per face)"
+            text += f", local phase (at most {args.max_candidates} candidates per face"
+            text += f", split depth {args.split_depth})" if args.split_depth else ")"
         return text
     return "all A0 vertices"
 
@@ -799,6 +801,9 @@ def parse_args():
         s.add_argument("--max-candidates", type=int, default=500, metavar="K",
                        help="with --distance: skip red faces with more candidate functions; "
                             "the distance is then only a lower bound (default: 500)")
+        s.add_argument("--split-depth", type=int, default=0, metavar="D",
+                       help="with --distance: split such faces in two up to D times first "
+                            "(default: 0)")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()

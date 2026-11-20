@@ -606,7 +606,8 @@ struct LocalStats {
   std::size_t points = 0;       // points where F was a candidate for evaluation
   std::size_t evaluations = 0;  // F evaluations
   std::size_t certified = 0;    // points shown F <= Delta by the bar-box test, not evaluated
-  std::size_t over_limit = 0;   // faces skipped: more than max_candidates candidates
+  std::size_t over_limit = 0;   // faces or pieces skipped: too many candidates at max depth
+  std::size_t splits = 0;       // faces or pieces cut in two (--split-depth)
 };
 
 // A linear function a s + b t + c of the slice (s, t).
@@ -744,180 +745,270 @@ inline std::vector<Linear> local_candidates(const BarBoxModule& M, const BarBoxM
 
 }  // namespace detail
 
+enum class LocalOutcome { green, done, over_limit };
+
+// The local phase on one convex polygon of slices that lies inside a single
+// face of A0 (a red face, or a piece of one). Raises delta to the maximum of F
+// over the polygon, or returns over_limit if it has more than max_candidates
+// candidates (then nothing is evaluated apart from new corners). With
+// new_corners, F is first checked at the corners, which the insertion has
+// not seen.
+inline LocalOutcome local_polygon(const std::vector<Point_2>& corners, const BarBoxModule& MB,
+                                  const BarBoxModule& NB, const Module& M, const Module& N,
+                                  FT& delta, std::size_t max_candidates, bool new_corners,
+                                  LocalStats& stats, std::set<Point_2, PointLess>& evaluated) {
+  if (bar_box_green(MB, NB, corners, delta)) return LocalOutcome::green;  // delta may have grown
+  const std::size_t k = corners.size();
+
+  // Evaluates F at p unless already done or certified <= delta.
+  auto evaluate = [&](const Point_2& p) {
+    if (!evaluated.insert(p).second) return;
+    if (bar_box_green(MB, NB, std::vector<Point_2>{p}, delta)) {
+      ++stats.certified;
+      return;
+    }
+    const std::optional<FT> value = F(M, N, p.x(), p.y());
+    ++stats.evaluations;
+    assert(value);  // F is finite (checked before)
+    if (*value > delta) delta = *value;
+  };
+  // Corners of a piece of a split face were not seen by the insertion.
+  if (new_corners)
+    for (const Point_2& c : corners) evaluate(c);
+
+  IntervalArithmetic arith;
+  std::vector<Interval> si, ti;
+  bar_box_corners<IntervalArithmetic>(corners, si, ti);
+  const BarBoxes<Interval> X = bar_boxes(MB, si, ti, arith), Y = bar_boxes(NB, si, ti, arith);
+  const double U = bar_box_upper(X.boxes, Y.boxes);
+  const bool bounded = U < std::numeric_limits<double>::infinity();
+  const FT U_exact = bounded ? FT(U) : FT(0);
+
+  FT ms(0), mt(0);
+  for (const Point_2& c : corners) {
+    ms += c.x();
+    mt += c.y();
+  }
+  const Point_2 mid(ms / static_cast<int>(k), mt / static_cast<int>(k));
+
+  const std::vector<Linear> E = detail::local_candidates(MB, NB, X, Y, corners, mid, delta, U);
+  const std::size_t m = E.size();
+  stats.candidates += m;
+  stats.largest = std::max(stats.largest, m);
+  if (m > max_candidates) return LocalOutcome::over_limit;
+  std::vector<LinearI> EI;
+  for (const Linear& e : E) EI.push_back(LinearI(e));
+
+  // Points where F might exceed delta, with the candidate value there.
+  std::vector<std::pair<FT, Point_2> > points;
+  auto in_window = [&](const FT& v) { return v > delta && (!bounded || v <= U_exact); };
+  const Interval delta_i = IntervalArithmetic::from(delta);
+  auto may_window = [&](double sup, double inf) { return sup > delta_i.inf() && inf <= U; };
+
+  // 1. Lines e_i = e_j that cross the face where the common value can lie
+  //    in the window. Their boundary points are candidates.
+  struct Line {
+    std::size_t i, j;
+  };
+  std::vector<Line> lines;
+  std::vector<std::vector<std::size_t> > through(m);  // lines through each function
+  for (std::size_t i = 0; i < m; i++)
+    for (std::size_t j = i + 1; j < m; j++) {
+      const LinearI LI = EI[i] - EI[j];
+      std::vector<Interval> v(k);
+      bool maybe_pos = false, maybe_neg = false;
+      for (std::size_t q = 0; q < k; q++) {
+        v[q] = LI.at(si[q], ti[q]);
+        maybe_pos = maybe_pos || v[q].sup() > 0;
+        maybe_neg = maybe_neg || v[q].inf() < 0;
+      }
+      if (!maybe_pos || !maybe_neg) continue;
+      // Range of e_i over the possible crossing points.
+      double hi = -std::numeric_limits<double>::infinity(), lo = std::numeric_limits<double>::infinity();
+      bool unsure = false;
+      for (std::size_t q = 0; q < k; q++) {
+        const std::size_t r = (q + 1) % k;
+        if ((v[q].inf() > 0 && v[r].inf() > 0) || (v[q].sup() < 0 && v[r].sup() < 0)) continue;
+        const Interval den = v[q] - v[r];
+        if (den.inf() <= 0 && den.sup() >= 0) {
+          unsure = true;
+          continue;
+        }
+        const Interval w = v[q] / den;
+        const Interval val = EI[i].at(si[q] + w * (si[r] - si[q]), ti[q] + w * (ti[r] - ti[q]));
+        hi = std::max(hi, val.sup());
+        lo = std::min(lo, val.inf());
+      }
+      if (!unsure && !may_window(hi, lo)) continue;
+
+      // Exact: the segment of the line inside the face.
+      const Linear L = E[i] - E[j];
+      std::vector<FT> ve(k);
+      bool pos = false, neg = false;
+      for (std::size_t q = 0; q < k; q++) {
+        ve[q] = L.at(corners[q]);
+        pos = pos || ve[q] > 0;
+        neg = neg || ve[q] < 0;
+      }
+      if (!pos || !neg) continue;
+      std::vector<Point_2> ends;
+      for (std::size_t q = 0; q < k; q++) {
+        const std::size_t r = (q + 1) % k;
+        if (ve[q] == 0) {
+          ends.push_back(corners[q]);
+        } else if ((ve[q] > 0 && ve[r] < 0) || (ve[q] < 0 && ve[r] > 0)) {
+          const FT w = ve[q] / (ve[q] - ve[r]);
+          ends.push_back(Point_2(corners[q].x() + w * (corners[r].x() - corners[q].x()),
+                                 corners[q].y() + w * (corners[r].y() - corners[q].y())));
+        }
+      }
+      if (ends.size() != 2) continue;  // a convex face meets a crossing line in a segment
+      const FT a = E[i].at(ends[0]), b = E[i].at(ends[1]);
+      if (!(std::max(a, b) > delta && (!bounded || std::min(a, b) <= U_exact))) continue;
+      through[i].push_back(lines.size());
+      through[j].push_back(lines.size());
+      lines.push_back(Line{i, j});
+      if (in_window(a)) points.push_back({a, ends[0]});
+      if (in_window(b)) points.push_back({b, ends[1]});
+    }
+  stats.lines += lines.size();
+
+  // 2. Points inside the face where three candidates e_i = e_j = e_k agree:
+  //    intersections of two lines through the same function.
+  for (std::size_t i = 0; i < m; i++)
+    for (std::size_t x = 0; x < through[i].size(); x++)
+      for (std::size_t y = x + 1; y < through[i].size(); y++) {
+        const Line& l1 = lines[through[i][x]];
+        const Line& l2 = lines[through[i][y]];
+        const std::size_t j = l1.i == i ? l1.j : l1.i, h = l2.i == i ? l2.j : l2.i;
+        if (j == h) continue;
+        const LinearI A1 = EI[i] - EI[j], A2 = EI[i] - EI[h];
+        const Interval det = A1.a * A2.b - A1.b * A2.a;
+        if (det.inf() > 0 || det.sup() < 0) {
+          const Interval ps = (A1.b * A2.c - A2.b * A1.c) / det;
+          const Interval pt = (A2.a * A1.c - A1.a * A2.c) / det;
+          bool maybe_inside = true;
+          for (std::size_t q = 0; q < k && maybe_inside; q++) {
+            const std::size_t r = (q + 1) % k;
+            const Interval cross = (si[r] - si[q]) * (pt - ti[q]) - (ti[r] - ti[q]) * (ps - si[q]);
+            maybe_inside = cross.sup() >= 0;
+          }
+          const Interval val = EI[i].at(ps, pt);
+          if (!maybe_inside || !may_window(val.sup(), val.inf())) continue;
+        }
+        const Linear B1 = E[i] - E[j], B2 = E[i] - E[h];
+        const FT d = B1.a * B2.b - B1.b * B2.a;
+        if (d == 0) continue;  // parallel or the same line: covered by its ends
+        const Point_2 p((B1.b * B2.c - B2.b * B1.c) / d, (B2.a * B1.c - B1.a * B2.c) / d);
+        bool inside = true;
+        for (std::size_t q = 0; q < k && inside; q++) {
+          const std::size_t r = (q + 1) % k;
+          inside = CGAL::orientation(corners[q], corners[r], p) != CGAL::RIGHT_TURN;
+        }
+        if (!inside) continue;
+        const FT val = E[i].at(p);
+        if (in_window(val)) points.push_back({val, p});
+      }
+  stats.points += points.size();
+
+  // 3. Evaluate, best candidate value first. F at a point can only exceed
+  //    delta if its candidate value does. At a single point the bar-box
+  //    boxes are the bars themselves, so its test is a cheap exact check
+  //    of F <= delta; only points it cannot certify are evaluated.
+  std::sort(points.begin(), points.end(),
+            [](const std::pair<FT, Point_2>& x, const std::pair<FT, Point_2>& y) {
+              return x.first > y.first;
+            });
+  for (const auto& vp : points) {
+    if (!(vp.first > delta)) break;
+    evaluate(vp.second);
+  }
+  return LocalOutcome::done;
+}
+
+namespace detail {
+
+// The convex polygon cut by the half-plane a s + b t + c >= 0 (exact).
+inline std::vector<Point_2> clip(const std::vector<Point_2>& poly, const FT& a, const FT& b,
+                                 const FT& c) {
+  std::vector<Point_2> out;
+  const std::size_t k = poly.size();
+  for (std::size_t q = 0; q < k; q++) {
+    const Point_2& p0 = poly[q];
+    const Point_2& p1 = poly[(q + 1) % k];
+    const FT v0 = a * p0.x() + b * p0.y() + c, v1 = a * p1.x() + b * p1.y() + c;
+    if (v0 >= 0) out.push_back(p0);
+    if ((v0 > 0 && v1 < 0) || (v0 < 0 && v1 > 0)) {
+      const FT w = v0 / (v0 - v1);
+      out.push_back(Point_2(p0.x() + w * (p1.x() - p0.x()), p0.y() + w * (p1.y() - p0.y())));
+    }
+  }
+  // Drop repeated points (a cut through a corner).
+  std::vector<Point_2> clean;
+  for (const Point_2& p : out)
+    if (clean.empty() || p != clean.back()) clean.push_back(p);
+  while (clean.size() > 1 && clean.front() == clean.back()) clean.pop_back();
+  return clean;
+}
+
+}  // namespace detail
+
+// The local phase on a polygon, splitting it in two while it has too many
+// candidates, at most max_depth times. A piece of a face of A0 lies in that
+// face, so the argument of the local phase applies to it unchanged; only its
+// new corners need checking. The cut halves the larger of the two extents
+// X (s_max - s_min) and t_max - t_min, which bound how far pushes move
+// (X = largest |v_x| of the strip), so the push ranges of the pieces shrink.
+inline void local_region(const std::vector<Point_2>& corners, const BarBoxModule& MB,
+                         const BarBoxModule& NB, const Module& M, const Module& N,
+                         const FT& max_x, FT& delta, std::size_t max_candidates,
+                         std::size_t depth, std::size_t max_depth, bool new_corners,
+                         LocalStats& stats, std::set<Point_2, PointLess>& evaluated) {
+  const LocalOutcome outcome = local_polygon(corners, MB, NB, M, N, delta, max_candidates,
+                                             new_corners, stats, evaluated);
+  if (outcome != LocalOutcome::over_limit) return;
+  if (depth >= max_depth) {
+    ++stats.over_limit;
+    return;
+  }
+  ++stats.splits;
+  FT smin = corners[0].x(), smax = smin, tmin = corners[0].y(), tmax = tmin;
+  for (const Point_2& c : corners) {
+    smin = std::min(smin, c.x());
+    smax = std::max(smax, c.x());
+    tmin = std::min(tmin, c.y());
+    tmax = std::max(tmax, c.y());
+  }
+  // Cut s = s_mid or t = t_mid, as halves of the polygon.
+  const bool cut_s = max_x * (smax - smin) >= tmax - tmin;
+  const FT mid = cut_s ? (smin + smax) / 2 : (tmin + tmax) / 2;
+  const FT a = cut_s ? FT(1) : FT(0), b = cut_s ? FT(0) : FT(1);
+  for (int side = 0; side < 2; side++) {
+    const FT sign = side ? FT(-1) : FT(1);
+    const std::vector<Point_2> piece = detail::clip(corners, sign * a, sign * b, -sign * mid);
+    if (piece.size() < 3) continue;
+    local_region(piece, MB, NB, M, N, max_x, delta, max_candidates, depth + 1, max_depth, true,
+                 stats, evaluated);
+  }
+}
+
 // Examines the red faces of a strip's colored arrangement (after
 // insert_strip) and raises delta to the maximum of F over them. M and N are
-// the strip's modules (swapped for the steep strip). `evaluated` collects the
-// points where F was evaluated, so a point shared by two faces is evaluated once.
+// the strip's modules (swapped for the steep strip). Faces with more than
+// max_candidates candidates are split up to max_depth times (0: never).
 inline void local_phase(const Colored_arrangement& arr, const Module& M, const Module& N,
-                        FT& delta, std::size_t max_candidates, LocalStats& stats) {
+                        FT& delta, std::size_t max_candidates, LocalStats& stats,
+                        std::size_t max_depth = 0) {
   const BarBoxModule MB = bar_box_module(M), NB = bar_box_module(N);
+  const FT X = max_abs_x(M, N);
   std::set<Point_2, PointLess> evaluated;
-
   for (auto f = arr.faces_begin(); f != arr.faces_end(); ++f) {
     if (f->is_unbounded() || f->data() != Color::red) continue;
     const std::vector<Point_2> corners = face_corners(f);
     if (bar_box_green(MB, NB, corners, delta)) continue;  // delta may have grown
     ++stats.red_faces;
-    const std::size_t k = corners.size();
-
-    IntervalArithmetic arith;
-    std::vector<Interval> si, ti;
-    bar_box_corners<IntervalArithmetic>(corners, si, ti);
-    const BarBoxes<Interval> X = bar_boxes(MB, si, ti, arith), Y = bar_boxes(NB, si, ti, arith);
-    const double U = bar_box_upper(X.boxes, Y.boxes);
-    const bool bounded = U < std::numeric_limits<double>::infinity();
-    const FT U_exact = bounded ? FT(U) : FT(0);
-
-    FT ms(0), mt(0);
-    for (const Point_2& c : corners) {
-      ms += c.x();
-      mt += c.y();
-    }
-    const Point_2 mid(ms / static_cast<int>(k), mt / static_cast<int>(k));
-
-    const std::vector<Linear> E = detail::local_candidates(MB, NB, X, Y, corners, mid, delta, U);
-    const std::size_t m = E.size();
-    stats.candidates += m;
-    stats.largest = std::max(stats.largest, m);
-    if (m > max_candidates) {
-      ++stats.over_limit;
-      continue;
-    }
-    std::vector<LinearI> EI;
-    for (const Linear& e : E) EI.push_back(LinearI(e));
-
-    // Points where F might exceed delta, with the candidate value there.
-    std::vector<std::pair<FT, Point_2> > points;
-    auto in_window = [&](const FT& v) { return v > delta && (!bounded || v <= U_exact); };
-    const Interval delta_i = IntervalArithmetic::from(delta);
-    auto may_window = [&](double sup, double inf) { return sup > delta_i.inf() && inf <= U; };
-
-    // 1. Lines e_i = e_j that cross the face where the common value can lie
-    //    in the window. Their boundary points are candidates.
-    struct Line {
-      std::size_t i, j;
-    };
-    std::vector<Line> lines;
-    std::vector<std::vector<std::size_t> > through(m);  // lines through each function
-    for (std::size_t i = 0; i < m; i++)
-      for (std::size_t j = i + 1; j < m; j++) {
-        const LinearI LI = EI[i] - EI[j];
-        std::vector<Interval> v(k);
-        bool maybe_pos = false, maybe_neg = false;
-        for (std::size_t q = 0; q < k; q++) {
-          v[q] = LI.at(si[q], ti[q]);
-          maybe_pos = maybe_pos || v[q].sup() > 0;
-          maybe_neg = maybe_neg || v[q].inf() < 0;
-        }
-        if (!maybe_pos || !maybe_neg) continue;
-        // Range of e_i over the possible crossing points.
-        double hi = -std::numeric_limits<double>::infinity(), lo = std::numeric_limits<double>::infinity();
-        bool unsure = false;
-        for (std::size_t q = 0; q < k; q++) {
-          const std::size_t r = (q + 1) % k;
-          if ((v[q].inf() > 0 && v[r].inf() > 0) || (v[q].sup() < 0 && v[r].sup() < 0)) continue;
-          const Interval den = v[q] - v[r];
-          if (den.inf() <= 0 && den.sup() >= 0) {
-            unsure = true;
-            continue;
-          }
-          const Interval w = v[q] / den;
-          const Interval val = EI[i].at(si[q] + w * (si[r] - si[q]), ti[q] + w * (ti[r] - ti[q]));
-          hi = std::max(hi, val.sup());
-          lo = std::min(lo, val.inf());
-        }
-        if (!unsure && !may_window(hi, lo)) continue;
-
-        // Exact: the segment of the line inside the face.
-        const Linear L = E[i] - E[j];
-        std::vector<FT> ve(k);
-        bool pos = false, neg = false;
-        for (std::size_t q = 0; q < k; q++) {
-          ve[q] = L.at(corners[q]);
-          pos = pos || ve[q] > 0;
-          neg = neg || ve[q] < 0;
-        }
-        if (!pos || !neg) continue;
-        std::vector<Point_2> ends;
-        for (std::size_t q = 0; q < k; q++) {
-          const std::size_t r = (q + 1) % k;
-          if (ve[q] == 0) {
-            ends.push_back(corners[q]);
-          } else if ((ve[q] > 0 && ve[r] < 0) || (ve[q] < 0 && ve[r] > 0)) {
-            const FT w = ve[q] / (ve[q] - ve[r]);
-            ends.push_back(Point_2(corners[q].x() + w * (corners[r].x() - corners[q].x()),
-                                   corners[q].y() + w * (corners[r].y() - corners[q].y())));
-          }
-        }
-        if (ends.size() != 2) continue;  // a convex face meets a crossing line in a segment
-        const FT a = E[i].at(ends[0]), b = E[i].at(ends[1]);
-        if (!(std::max(a, b) > delta && (!bounded || std::min(a, b) <= U_exact))) continue;
-        through[i].push_back(lines.size());
-        through[j].push_back(lines.size());
-        lines.push_back(Line{i, j});
-        if (in_window(a)) points.push_back({a, ends[0]});
-        if (in_window(b)) points.push_back({b, ends[1]});
-      }
-    stats.lines += lines.size();
-
-    // 2. Points inside the face where three candidates e_i = e_j = e_k agree:
-    //    intersections of two lines through the same function.
-    for (std::size_t i = 0; i < m; i++)
-      for (std::size_t x = 0; x < through[i].size(); x++)
-        for (std::size_t y = x + 1; y < through[i].size(); y++) {
-          const Line& l1 = lines[through[i][x]];
-          const Line& l2 = lines[through[i][y]];
-          const std::size_t j = l1.i == i ? l1.j : l1.i, h = l2.i == i ? l2.j : l2.i;
-          if (j == h) continue;
-          const LinearI A1 = EI[i] - EI[j], A2 = EI[i] - EI[h];
-          const Interval det = A1.a * A2.b - A1.b * A2.a;
-          if (det.inf() > 0 || det.sup() < 0) {
-            const Interval ps = (A1.b * A2.c - A2.b * A1.c) / det;
-            const Interval pt = (A2.a * A1.c - A1.a * A2.c) / det;
-            bool maybe_inside = true;
-            for (std::size_t q = 0; q < k && maybe_inside; q++) {
-              const std::size_t r = (q + 1) % k;
-              const Interval cross = (si[r] - si[q]) * (pt - ti[q]) - (ti[r] - ti[q]) * (ps - si[q]);
-              maybe_inside = cross.sup() >= 0;
-            }
-            const Interval val = EI[i].at(ps, pt);
-            if (!maybe_inside || !may_window(val.sup(), val.inf())) continue;
-          }
-          const Linear B1 = E[i] - E[j], B2 = E[i] - E[h];
-          const FT d = B1.a * B2.b - B1.b * B2.a;
-          if (d == 0) continue;  // parallel or the same line: covered by its ends
-          const Point_2 p((B1.b * B2.c - B2.b * B1.c) / d, (B2.a * B1.c - B1.a * B2.c) / d);
-          bool inside = true;
-          for (std::size_t q = 0; q < k && inside; q++) {
-            const std::size_t r = (q + 1) % k;
-            inside = CGAL::orientation(corners[q], corners[r], p) != CGAL::RIGHT_TURN;
-          }
-          if (!inside) continue;
-          const FT val = E[i].at(p);
-          if (in_window(val)) points.push_back({val, p});
-        }
-    stats.points += points.size();
-
-    // 3. Evaluate, best candidate value first. F at a point can only exceed
-    //    delta if its candidate value does. At a single point the bar-box
-    //    boxes are the bars themselves, so its test is a cheap exact check
-    //    of F <= delta; only points it cannot certify are evaluated.
-    std::sort(points.begin(), points.end(),
-              [](const std::pair<FT, Point_2>& x, const std::pair<FT, Point_2>& y) {
-                return x.first > y.first;
-              });
-    for (const auto& vp : points) {
-      if (!(vp.first > delta)) break;
-      if (!evaluated.insert(vp.second).second) continue;
-      if (bar_box_green(MB, NB, std::vector<Point_2>{vp.second}, delta)) {
-        ++stats.certified;
-        continue;
-      }
-      const std::optional<FT> value = F(M, N, vp.second.x(), vp.second.y());
-      ++stats.evaluations;
-      assert(value);  // F is finite (checked before)
-      if (*value > delta) delta = *value;
-    }
+    local_region(corners, MB, NB, M, N, X, delta, max_candidates, 0, max_depth, false, stats,
+                 evaluated);
   }
 }
 
@@ -930,6 +1021,7 @@ struct IncrementalOptions {
   FaceBound bound = FaceBound::both;   // face bound of the insertion
   bool local_phase = false;            // go beyond the A0 vertices: the matching distance
   std::size_t max_candidates = 500;    // local phase: skip faces with more candidates
+  std::size_t split_depth = 0;         // local phase: split such faces up to this depth first
 };
 
 struct IncrementalResult {
@@ -969,8 +1061,9 @@ inline IncrementalResult incremental_max_F(const Module& M, const Module& N,
   result.a0_max = delta;
 
   if (options.local_phase) {
-    local_phase(flat, M, N, delta, options.max_candidates, result.local);
-    local_phase(steep, M_swap, N_swap, delta, options.max_candidates, result.local);
+    local_phase(flat, M, N, delta, options.max_candidates, result.local, options.split_depth);
+    local_phase(steep, M_swap, N_swap, delta, options.max_candidates, result.local,
+                options.split_depth);
   }
   result.distance = delta;
   return result;

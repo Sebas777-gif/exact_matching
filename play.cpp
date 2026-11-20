@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
               << " file1 file2 [--dim d] [--no-aida] [--a0-only]"
               << " [--incremental [--samples k] [--seed n] [--no-skip]"
               << " [--bound lipschitz|variation|barbox|both]]"
-              << " [--distance [--max-candidates k]]"
+              << " [--distance [--max-candidates k] [--split-depth d]]"
               << " (each file .scc, .scc_k, .minpres_k, .sccsum, or .bif)"
               << std::endl;
     std::exit(1);
@@ -32,6 +32,7 @@ int main(int argc, char** argv) {
   long samples = 50;
   long seed = 1;
   long max_candidates = 500;
+  long split_depth = 0;
   int homology_dim = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -61,7 +62,8 @@ int main(int argc, char** argv) {
     } else if (arg == "--distance") {
       distance = true;
       incremental = true;  // the local phase works on the colored arrangement
-    } else if (arg == "--samples" || arg == "--seed" || arg == "--max-candidates") {
+    } else if (arg == "--samples" || arg == "--seed" || arg == "--max-candidates"
+               || arg == "--split-depth") {
       if (i + 1 >= argc) {
         std::cerr << arg << " needs an integer" << std::endl;
         std::exit(1);
@@ -71,7 +73,8 @@ int main(int argc, char** argv) {
         std::cerr << arg << " must be non-negative" << std::endl;
         std::exit(1);
       }
-      (arg == "--samples" ? samples : arg == "--seed" ? seed : max_candidates) = value;
+      (arg == "--samples" ? samples : arg == "--seed" ? seed
+       : arg == "--max-candidates" ? max_candidates : split_depth) = value;
     } else if (arg == "--dim") {
       if (i + 1 >= argc) {
         std::cerr << "--dim needs an integer" << std::endl;
@@ -149,6 +152,7 @@ int main(int argc, char** argv) {
     options.bound = bound;
     options.local_phase = distance;
     options.max_candidates = max_candidates;
+    options.split_depth = split_depth;
     const matching::IncrementalResult result =
         matching::incremental_max_F(modules[0], modules[1], options);
 
@@ -185,7 +189,8 @@ int main(int argc, char** argv) {
                 << " candidate functions (at most " << L.largest << " in a face), " << L.lines
                 << " relevant lines, " << L.points << " candidate points, " << L.certified
                 << " certified without evaluating, " << L.evaluations
-                << " evaluations, " << L.over_limit << " faces over the candidate limit"
+                << " evaluations, " << L.splits << " splits, " << L.over_limit
+                << " faces over the candidate limit"
                 << std::endl;
       std::cout << "Matching distance: " << format(result.distance);
       if (L.over_limit)

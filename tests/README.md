@@ -169,7 +169,11 @@ large red faces have thousands of candidate functions.
 
 ```bash
 ./bench.py medium --aida --distance --no-hera
+./bench.py medium --aida --distance --split-depth 8 --no-hera   # all 13 exact
 ```
+
+With `--split-depth 8`, faces over the candidate limit are cut in two up to
+8 times, and the three `merge_*` pairs are exact too (53–70 s each).
 
 The script exits with 1 if a case fails. Hera's `matching_dist` value (on
 the matching `.bif` files; `--hera PATH` or `HERA_BIN` if set, otherwise
