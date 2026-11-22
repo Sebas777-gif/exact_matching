@@ -173,7 +173,9 @@ large red faces have thousands of candidate functions.
 ```
 
 With `--split-depth 8`, faces over the candidate limit are cut in two up to
-8 times, and the three `merge_*` pairs are exact too (53–70 s each).
+8 times, and the three `merge_*` pairs are exact too (53–70 s each). Adding
+`--level-lines 20000` (certify red faces via their level lines first) brings
+them to 20–31 s.
 
 The script exits with 1 if a case fails. Hera's `matching_dist` value (on
 the matching `.bif` files; `--hera PATH` or `HERA_BIN` if set, otherwise

@@ -285,6 +285,21 @@ int main() {
                 && r.local.splits > 0,
             str(r.distance) + ", " + std::to_string(r.local.splits) + " splits");
     }
+    // The same pair with level-line certification: here F exceeds the A0
+    // maximum, so a level-line cell must raise Delta, and the result must
+    // still be exactly 3/2.
+    {
+      IncrementalOptions level = options;
+      level.level_lines = 100;
+      IncrementalResult r = incremental_max_F(
+          as_module(make_presentation({ {1, 0}, {0, 2} }, { { {1, 2}, {0} }, { {3, 2}, {1} } })),
+          as_module(make_presentation({ {0, 0} }, { { {3, 2}, {0} } })), level);
+      check("distance: ell vs span with level lines",
+            r.distance && *r.distance == FT(3) / 2 && r.local.over_limit == 0
+                && r.local.level_tries > 0,
+            str(r.distance) + ", " + std::to_string(r.local.level_tries) + " tries, "
+                + std::to_string(r.local.level_raised) + " raised");
+    }
     // One vs two free generators: different numbers of infinite bars.
     IncrementalResult r3 = distance(make_presentation({ {0, 0} }, {}),
                                     make_presentation({ {0, 0}, {1, 1} }, {}));

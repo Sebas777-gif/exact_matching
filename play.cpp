@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
               << " file1 file2 [--dim d] [--no-aida] [--a0-only]"
               << " [--incremental [--samples k] [--seed n] [--no-skip]"
               << " [--bound lipschitz|variation|barbox|both]]"
-              << " [--distance [--max-candidates k] [--split-depth d]]"
+              << " [--distance [--max-candidates k] [--split-depth d] [--level-lines l]]"
               << " (each file .scc, .scc_k, .minpres_k, .sccsum, or .bif)"
               << std::endl;
     std::exit(1);
@@ -33,6 +33,7 @@ int main(int argc, char** argv) {
   long seed = 1;
   long max_candidates = 500;
   long split_depth = 0;
+  long level_lines = 0;
   int homology_dim = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -63,7 +64,7 @@ int main(int argc, char** argv) {
       distance = true;
       incremental = true;  // the local phase works on the colored arrangement
     } else if (arg == "--samples" || arg == "--seed" || arg == "--max-candidates"
-               || arg == "--split-depth") {
+               || arg == "--split-depth" || arg == "--level-lines") {
       if (i + 1 >= argc) {
         std::cerr << arg << " needs an integer" << std::endl;
         std::exit(1);
@@ -74,7 +75,8 @@ int main(int argc, char** argv) {
         std::exit(1);
       }
       (arg == "--samples" ? samples : arg == "--seed" ? seed
-       : arg == "--max-candidates" ? max_candidates : split_depth) = value;
+       : arg == "--max-candidates" ? max_candidates
+       : arg == "--split-depth" ? split_depth : level_lines) = value;
     } else if (arg == "--dim") {
       if (i + 1 >= argc) {
         std::cerr << "--dim needs an integer" << std::endl;
@@ -153,6 +155,7 @@ int main(int argc, char** argv) {
     options.local_phase = distance;
     options.max_candidates = max_candidates;
     options.split_depth = split_depth;
+    options.level_lines = level_lines;
     const matching::IncrementalResult result =
         matching::incremental_max_F(modules[0], modules[1], options);
 
@@ -192,6 +195,11 @@ int main(int argc, char** argv) {
                 << " evaluations, " << L.splits << " splits, " << L.over_limit
                 << " faces over the candidate limit"
                 << std::endl;
+      if (level_lines)
+        std::cout << "Level lines: " << L.level_tries << " polygons tried, " << L.level_certified
+                  << " certified, " << L.level_raised << " raised Delta, " << L.level_skipped
+                  << " over the line limit; " << L.level_lines << " lines, " << L.level_cells
+                  << " cells, " << L.level_checks << " cells checked at a point" << std::endl;
       std::cout << "Matching distance: " << format(result.distance);
       if (L.over_limit)
         std::cout << ", lower bound (" << L.over_limit << " faces over the candidate limit)";

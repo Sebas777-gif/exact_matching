@@ -335,15 +335,18 @@ void bar_box_corners(const std::vector<Point_2>& corners, std::vector<typename A
 
 // Whether the bar-box bound shows F <= delta on the whole polygon. Decided
 // in interval arithmetic, and exactly if interval arithmetic was unsure.
+// With exact_fallback = false, only the interval test runs: cheaper, but it
+// may answer false where the exact test would answer true (at ties).
 inline bool bar_box_green(const BarBoxModule& M, const BarBoxModule& N,
-                          const std::vector<Point_2>& corners, const FT& delta) {
+                          const std::vector<Point_2>& corners, const FT& delta,
+                          bool exact_fallback = true) {
   {
     IntervalArithmetic arith;
     std::vector<Interval> s, t;
     bar_box_corners<IntervalArithmetic>(corners, s, t);
     const auto X = bar_boxes(M, s, t, arith), Y = bar_boxes(N, s, t, arith);
     if (bar_box_feasible(X.boxes, Y.boxes, IntervalArithmetic::from(delta), arith)) return true;
-    if (!arith.uncertain) return false;
+    if (!arith.uncertain || !exact_fallback) return false;
   }
   ExactArithmetic arith;
   std::vector<FT> s, t;

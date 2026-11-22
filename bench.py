@@ -255,7 +255,8 @@ def run_play(args, files, dim=None):
         cmd += ["--bound", args.bound]
         if args.distance:
             cmd += ["--distance", "--max-candidates", str(args.max_candidates),
-                    "--split-depth", str(args.split_depth)]
+                    "--split-depth", str(args.split_depth),
+                    "--level-lines", str(args.level_lines)]
     return run(cmd, args.timeout)
 
 
@@ -585,7 +586,11 @@ def method(args):
         text = f"incremental, {args.samples} samples, seed {args.seed}, {skip}, {args.bound} bound"
         if args.distance:
             text += f", local phase (at most {args.max_candidates} candidates per face"
-            text += f", split depth {args.split_depth})" if args.split_depth else ")"
+            if args.split_depth:
+                text += f", split depth {args.split_depth}"
+            if args.level_lines:
+                text += f", level lines up to {args.level_lines}"
+            text += ")"
         return text
     return "all A0 vertices"
 
@@ -804,6 +809,9 @@ def parse_args():
         s.add_argument("--split-depth", type=int, default=0, metavar="D",
                        help="with --distance: split such faces in two up to D times first "
                             "(default: 0)")
+        s.add_argument("--level-lines", type=int, default=0, metavar="L",
+                       help="with --distance: first try to certify each red face via its "
+                            "level lines e = Delta, if it has at most L of them (default: 0, off)")
         if aida is not None:
             s.set_defaults(aida=aida)
             g = s.add_mutually_exclusive_group()

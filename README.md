@@ -176,6 +176,7 @@ Two files, one module each:
 | `--distance` | Compute the matching distance: `--incremental` followed by the local phase on the red faces. |
 | `--max-candidates k` | With `--distance`: skip red faces with more than $k$ candidate functions (default 500). The result is then only a lower bound, and play says so. |
 | `--split-depth d` | With `--distance`: cut such a face in two, and the pieces again, up to $d$ times, before giving up on it (default 0: no splitting). Smaller pieces have shorter push ranges and fewer candidates. A depth of 8 turns the lower bounds of the `full_rips` and `merge_*` test pairs into exact distances. |
+| `--level-lines l` | With `--distance`: first try to show $F \le \Delta$ on each red face via the level lines $e = \Delta$ of its candidate functions $e$, if it has at most $l$ of them (default 0: off). The face is cut along these lines; a piece where no candidate exceeds $\Delta$, or which the bar-box bound (in interval arithmetic) turns green, is done, and each remaining cell is checked exactly at one point. If $F > \Delta$ somewhere, $\Delta$ grows and the face is tried again (up to 3 times), then searched for its maximum as without this flag. Prints a `Level lines:` line with the counts. With `--split-depth 8 --level-lines 20000`, every `kerber-extended`, `finite` and `medium` pair is exact, and the hard ones are 2–30× faster than with splitting alone. |
 
 Flags may appear before or after the file names. Any other `--flag`
 (including the removed `--no-refine` and `--no-cgal`) is an error.

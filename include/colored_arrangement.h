@@ -16,8 +16,10 @@
 #include <CGAL/Arr_extended_dcel.h>
 #include <CGAL/Arr_observer.h>
 
+#include <functional>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <random>
 
 #include <bar_box_bound.h>
@@ -608,6 +610,14 @@ struct LocalStats {
   std::size_t certified = 0;    // points shown F <= Delta by the bar-box test, not evaluated
   std::size_t over_limit = 0;   // faces or pieces skipped: too many candidates at max depth
   std::size_t splits = 0;       // faces or pieces cut in two (--split-depth)
+  // Level-line certification (--level-lines):
+  std::size_t level_tries = 0;      // polygons it was tried on
+  std::size_t level_lines = 0;      // lines e = Delta crossing them, summed
+  std::size_t level_cells = 0;      // cells of those line arrangements
+  std::size_t level_checks = 0;     // cells with a candidate above Delta: F checked at a point
+  std::size_t level_certified = 0;  // polygons shown F <= Delta this way
+  std::size_t level_raised = 0;     // tries that found F > Delta (then Delta grows)
+  std::size_t level_skipped = 0;    // polygons with more level lines than the limit
 };
 
 // A linear function a s + b t + c of the slice (s, t).
@@ -747,6 +757,206 @@ inline std::vector<Linear> local_candidates(const BarBoxModule& M, const BarBoxM
 
 enum class LocalOutcome { green, done, over_limit };
 
+// --- Certifying a polygon via level lines -------------------------------------
+//
+// Deciding F <= delta on a polygon P inside a face of A0 needs far fewer
+// lines than finding the maximum (Bjerkevik and Kerber decide d_M <= lambda
+// the same way). Let E be the candidates of P for delta. Wherever F > delta
+// in P, F equals some e in E (the argument of the local phase). Then:
+//
+//   The boundary of {F > delta} inside P lies on the level lines e = delta,
+//   e in E. Take p on that boundary and points q_n -> p with F(q_n) > delta.
+//   Infinitely many q_n share one candidate e with F(q_n) = e(q_n), and by
+//   continuity of F and e, e(p) = F(p) = delta.
+//
+// So on each cell of the arrangement of the level lines inside P, either
+// F > delta everywhere or nowhere. A point of {F > delta} on a line or on the
+// edge of P has a neighbourhood in {F > delta}, which meets an open cell, so
+// checking one inside point per cell decides F <= delta on all of P. A cell
+// where no candidate exceeds delta needs no check at all: F > delta at a
+// point means some candidate does. No lines where the order of two pushes
+// changes are needed, as F is continuous across them.
+//
+// The cells are found by cutting P recursively along the level lines (a
+// binary space partition), not by building their arrangement. A piece
+// needs no further cuts once no candidate exceeds delta on it, or once the
+// bar-box bound shows F <= delta on it. Cells are checked exactly at a point.
+
+enum class LevelOutcome { certified, raised, too_many_lines };
+
+namespace detail {
+
+// A convex polygon as its corners and the lines of its edges: edge q, from
+// corner q to corner q+1, lies on lines[q]. Corners are always computed as
+// the intersection of two edge lines, so they never become nested
+// constructions.
+struct LinePolygon {
+  std::vector<Point_2> corners;
+  std::vector<Linear> lines;
+};
+
+inline Point_2 meet(const Linear& l1, const Linear& l2) {
+  const FT d = l1.a * l2.b - l1.b * l2.a;
+  assert(d != 0);
+  return Point_2((l1.b * l2.c - l2.b * l1.c) / d, (l2.a * l1.c - l1.a * l2.c) / d);
+}
+
+inline Linear line_through(const Point_2& p, const Point_2& q) {
+  // (q - p) x (r - p) = 0 as a s + b t + c = 0, positive to the left.
+  const FT a = -(q.y() - p.y()), b = q.x() - p.x();
+  return Linear{a, b, -(a * p.x() + b * p.y())};
+}
+
+// The part of P where L >= 0. L must cross the inside of P.
+inline LinePolygon clip_lines(const LinePolygon& P, const Linear& L) {
+  LinePolygon out;
+  const std::size_t k = P.corners.size();
+  std::vector<CGAL::Sign> sg(k);
+  for (std::size_t q = 0; q < k; q++) sg[q] = CGAL::sign(L.at(P.corners[q]));
+  for (std::size_t q = 0; q < k; q++) {
+    const std::size_t r = (q + 1) % k;
+    if (sg[q] == CGAL::POSITIVE) {
+      out.corners.push_back(P.corners[q]);
+      out.lines.push_back(P.lines[q]);
+      if (sg[r] == CGAL::NEGATIVE) {
+        out.corners.push_back(meet(P.lines[q], L));
+        out.lines.push_back(L);
+      }
+    } else if (sg[q] == CGAL::ZERO) {
+      out.corners.push_back(P.corners[q]);
+      out.lines.push_back(sg[r] == CGAL::NEGATIVE ? L : P.lines[q]);
+    } else if (sg[r] == CGAL::POSITIVE) {
+      out.corners.push_back(meet(P.lines[q], L));
+      out.lines.push_back(P.lines[q]);
+    }
+  }
+  return out;
+}
+
+}  // namespace detail
+
+inline LevelOutcome level_certify(const std::vector<Point_2>& corners, const std::vector<Linear>& E,
+                                  const BarBoxModule& MB, const BarBoxModule& NB, const Module& M,
+                                  const Module& N, FT& delta, std::size_t max_lines,
+                                  LocalStats& stats, std::set<Point_2, PointLess>& evaluated) {
+  const std::size_t k = corners.size(), m = E.size();
+  // The level line e - delta = 0 of each candidate, scaled so that equal
+  // lines coincide; line_of[i] is the index of candidate i's line (or -1
+  // for a constant candidate).
+  std::map<Linear, int> line_index;
+  std::vector<Linear> level;
+  std::vector<int> line_of(m, -1);
+  for (std::size_t i = 0; i < m; i++) {
+    const Linear L{E[i].a, E[i].b, E[i].c - delta};
+    if (L.a == 0 && L.b == 0) continue;
+    const FT n = L.a != 0 ? L.a : L.b;
+    const Linear key{L.a / n, L.b / n, L.c / n};
+    auto it = line_index.emplace(key, static_cast<int>(level.size()));
+    if (it.second) level.push_back(key);
+    line_of[i] = it.first->second;
+  }
+  if (level.size() > max_lines) {
+    ++stats.level_skipped;
+    return LevelOutcome::too_many_lines;
+  }
+  ++stats.level_tries;
+  // Cuts in a random order (a randomized binary space partition).
+  std::vector<int> rank(level.size());
+  std::iota(rank.begin(), rank.end(), 0);
+  std::shuffle(rank.begin(), rank.end(), std::mt19937(static_cast<unsigned>(level.size())));
+
+  std::vector<LinearI> EI;
+  for (const Linear& e : E) EI.push_back(LinearI(e));
+  const Interval delta_i = IntervalArithmetic::from(delta);
+
+  detail::LinePolygon root;
+  root.corners = corners;
+  for (std::size_t q = 0; q < k; q++)
+    root.lines.push_back(detail::line_through(corners[q], corners[(q + 1) % k]));
+  std::vector<std::size_t> all(m);
+  std::iota(all.begin(), all.end(), 0);
+  std::set<int> lines_seen;
+
+  // Returns false once F > delta was found (and delta raised).
+  // A candidate that is >= delta on all of a piece and > delta somewhere
+  // stays so on every sub-piece, so instead of passing it down, a flag
+  // `above` records that one exists. Only candidates whose line crosses the
+  // piece are passed on.
+  std::function<bool(const detail::LinePolygon&, const std::vector<std::size_t>&, bool, bool)> visit =
+      [&](const detail::LinePolygon& P, const std::vector<std::size_t>& parent, bool above,
+          bool try_box) -> bool {
+    const std::size_t pk = P.corners.size();
+    std::vector<Interval> s(pk), t(pk);
+    for (std::size_t q = 0; q < pk; q++) {
+      s[q] = CGAL::to_interval(P.corners[q].x());
+      t[q] = CGAL::to_interval(P.corners[q].y());
+    }
+    // The candidates of the parent whose level line crosses the inside of P.
+    std::vector<std::size_t> C;
+    int cut = -1;
+    for (std::size_t i : parent) {
+      bool up = false, down = false;
+      for (std::size_t q = 0; q < pk; q++) {
+        const Interval v = EI[i].at(s[q], t[q]);
+        if (v.inf() > delta_i.sup()) up = true;
+        else if (v.sup() < delta_i.inf()) down = true;
+        else {
+          const CGAL::Comparison_result c = CGAL::compare(E[i].at(P.corners[q]), delta);
+          up = up || c == CGAL::LARGER;
+          down = down || c == CGAL::SMALLER;
+        }
+      }
+      if (!up) continue;  // <= delta on P
+      if (!down) {        // >= delta on P, > delta inside
+        above = true;
+        continue;
+      }
+      C.push_back(i);
+      if (cut < 0 || rank[line_of[i]] < rank[cut]) cut = line_of[i];
+    }
+    if (C.empty() && !above) return true;  // no candidate above delta: F <= delta on P
+    // Interval arithmetic only: at plateaus where F = delta, the exact
+    // fallback is uncertain on large pieces and costs more than cutting on.
+    if (try_box && bar_box_green(MB, NB, P.corners, delta, false)) return true;
+    if (cut < 0) {
+      // A cell: some candidate exceeds delta on all of it. Check one point.
+      ++stats.level_cells;
+      ++stats.level_checks;
+      FT ms(0), mt(0);
+      for (const Point_2& c : P.corners) {
+        ms += c.x();
+        mt += c.y();
+      }
+      const Point_2 p(ms / static_cast<int>(pk), mt / static_cast<int>(pk));
+      if (!evaluated.insert(p).second) return true;
+      if (bar_box_green(MB, NB, std::vector<Point_2>{p}, delta)) {
+        ++stats.certified;
+        return true;
+      }
+      const std::optional<FT> value = F(M, N, p.x(), p.y());
+      ++stats.evaluations;
+      assert(value);
+      if (*value > delta) {
+        delta = *value;
+        return false;
+      }
+      return true;
+    }
+    lines_seen.insert(cut);
+    const Linear& L = level[cut];
+    return visit(detail::clip_lines(P, L), C, above, true)
+        && visit(detail::clip_lines(P, Linear{-L.a, -L.b, -L.c}), C, above, true);
+  };
+  const bool ok = visit(root, all, false, false);  // the whole polygon is not green
+  stats.level_lines += lines_seen.size();
+  if (!ok) {
+    ++stats.level_raised;
+    return LevelOutcome::raised;
+  }
+  ++stats.level_certified;
+  return LevelOutcome::certified;
+}
+
 // The local phase on one convex polygon of slices that lies inside a single
 // face of A0 (a red face, or a piece of one). Raises delta to the maximum of F
 // over the polygon, or returns over_limit if it has more than max_candidates
@@ -756,7 +966,8 @@ enum class LocalOutcome { green, done, over_limit };
 inline LocalOutcome local_polygon(const std::vector<Point_2>& corners, const BarBoxModule& MB,
                                   const BarBoxModule& NB, const Module& M, const Module& N,
                                   FT& delta, std::size_t max_candidates, bool new_corners,
-                                  LocalStats& stats, std::set<Point_2, PointLess>& evaluated) {
+                                  LocalStats& stats, std::set<Point_2, PointLess>& evaluated,
+                                  std::size_t level_lines = 0, std::size_t level_rounds = 3) {
   if (bar_box_green(MB, NB, corners, delta)) return LocalOutcome::green;  // delta may have grown
   const std::size_t k = corners.size();
 
@@ -795,6 +1006,18 @@ inline LocalOutcome local_polygon(const std::vector<Point_2>& corners, const Bar
   const std::size_t m = E.size();
   stats.candidates += m;
   stats.largest = std::max(stats.largest, m);
+
+  // First try to show F <= delta via level lines. If F > delta somewhere,
+  // delta grows; try again with the new delta (and fewer candidates) a few
+  // times, then search for the maximum below.
+  if (level_lines > 0 && level_rounds > 0) {
+    const LevelOutcome lo = level_certify(corners, E, MB, NB, M, N, delta, level_lines, stats,
+                                          evaluated);
+    if (lo == LevelOutcome::certified) return LocalOutcome::done;
+    if (lo == LevelOutcome::raised)
+      return local_polygon(corners, MB, NB, M, N, delta, max_candidates, false, stats, evaluated,
+                           level_lines, level_rounds - 1);
+  }
   if (m > max_candidates) return LocalOutcome::over_limit;
   std::vector<LinearI> EI;
   for (const Linear& e : E) EI.push_back(LinearI(e));
@@ -963,9 +1186,10 @@ inline void local_region(const std::vector<Point_2>& corners, const BarBoxModule
                          const BarBoxModule& NB, const Module& M, const Module& N,
                          const FT& max_x, FT& delta, std::size_t max_candidates,
                          std::size_t depth, std::size_t max_depth, bool new_corners,
-                         LocalStats& stats, std::set<Point_2, PointLess>& evaluated) {
+                         LocalStats& stats, std::set<Point_2, PointLess>& evaluated,
+                         std::size_t level_lines = 0) {
   const LocalOutcome outcome = local_polygon(corners, MB, NB, M, N, delta, max_candidates,
-                                             new_corners, stats, evaluated);
+                                             new_corners, stats, evaluated, level_lines);
   if (outcome != LocalOutcome::over_limit) return;
   if (depth >= max_depth) {
     ++stats.over_limit;
@@ -988,7 +1212,7 @@ inline void local_region(const std::vector<Point_2>& corners, const BarBoxModule
     const std::vector<Point_2> piece = detail::clip(corners, sign * a, sign * b, -sign * mid);
     if (piece.size() < 3) continue;
     local_region(piece, MB, NB, M, N, max_x, delta, max_candidates, depth + 1, max_depth, true,
-                 stats, evaluated);
+                 stats, evaluated, level_lines);
   }
 }
 
@@ -998,7 +1222,7 @@ inline void local_region(const std::vector<Point_2>& corners, const BarBoxModule
 // max_candidates candidates are split up to max_depth times (0: never).
 inline void local_phase(const Colored_arrangement& arr, const Module& M, const Module& N,
                         FT& delta, std::size_t max_candidates, LocalStats& stats,
-                        std::size_t max_depth = 0) {
+                        std::size_t max_depth = 0, std::size_t level_lines = 0) {
   const BarBoxModule MB = bar_box_module(M), NB = bar_box_module(N);
   const FT X = max_abs_x(M, N);
   std::set<Point_2, PointLess> evaluated;
@@ -1008,7 +1232,7 @@ inline void local_phase(const Colored_arrangement& arr, const Module& M, const M
     if (bar_box_green(MB, NB, corners, delta)) continue;  // delta may have grown
     ++stats.red_faces;
     local_region(corners, MB, NB, M, N, X, delta, max_candidates, 0, max_depth, false, stats,
-                 evaluated);
+                 evaluated, level_lines);
   }
 }
 
@@ -1022,6 +1246,7 @@ struct IncrementalOptions {
   bool local_phase = false;            // go beyond the A0 vertices: the matching distance
   std::size_t max_candidates = 500;    // local phase: skip faces with more candidates
   std::size_t split_depth = 0;         // local phase: split such faces up to this depth first
+  std::size_t level_lines = 0;         // local phase: certify via at most this many level lines (0: off)
 };
 
 struct IncrementalResult {
@@ -1061,9 +1286,10 @@ inline IncrementalResult incremental_max_F(const Module& M, const Module& N,
   result.a0_max = delta;
 
   if (options.local_phase) {
-    local_phase(flat, M, N, delta, options.max_candidates, result.local, options.split_depth);
+    local_phase(flat, M, N, delta, options.max_candidates, result.local, options.split_depth,
+                options.level_lines);
     local_phase(steep, M_swap, N_swap, delta, options.max_candidates, result.local,
-                options.split_depth);
+                options.split_depth, options.level_lines);
   }
   result.distance = delta;
   return result;
