@@ -384,9 +384,14 @@ def run_hera(args, a, b, dim):
 
 # --- results files --------------------------------------------------------------
 
+TAB = 4   # tab width that aligned result files assume (editors; less -x4)
+
+
 class Results:
     """Tab-separated file: '# key: value' header lines, a column line, one row
-    per pair. Rows are appended right away, so a crash loses nothing."""
+    per pair. Rows are appended right away, so a crash loses nothing. When a
+    benchmark finishes, align() pads the columns with tabs; a file read back
+    is turned into plain tab-separated rows again before new rows are added."""
 
     def __init__(self, path, title, settings, info, columns, fresh):
         self.path = path
@@ -394,7 +399,7 @@ class Results:
             header = [f"# {title}", f"# started: {datetime.now().isoformat(timespec='seconds')}"]
             header += [f"# {k}: {v}" for k, v in {**settings, **info}.items()]
             path.write_text("\n".join(header + ["\t".join(columns)]) + "\n")
-            self.rows = []
+            self.header, self.columns, self.rows = "\t".join(columns), list(columns), []
             return
         lines = path.read_text().splitlines()
         found = dict(line[2:].split(": ", 1) for line in lines
@@ -403,11 +408,51 @@ class Results:
             if found.get(k) != str(v):
                 sys.exit(f"error: {path} has {k}: {found.get(k)}, not {v}. "
                          "Use the same options, or --fresh to start over.")
-        self.rows = [line.split("\t") for line in lines if line and not line.startswith("#")][1:]
+        comments = [line for line in lines if line.startswith("#")]
+        table = [line for line in lines if line and not line.startswith("#")]
+        self.header = table[0] if table else "\t".join(columns)
+        self.columns = re.split(r"\t+", self.header)
+        self.rows = [self.split(line) for line in table[1:]]
+        if table and table[0] != "\t".join(self.columns):   # aligned: write it back plain
+            path.write_text("\n".join(comments + ["\t".join(r) for r in [self.columns] + self.rows])
+                            + "\n")
+
+    def split(self, line):
+        """Cells of a plain row, or of a row aligned by align(), which may
+        have empty cells: those are found by the tab stops of the columns."""
+        cells = line.split("\t")
+        if len(cells) == len(self.columns):
+            return cells
+        starts = [m.start() for m in re.finditer(r"[^\t ]+", self.header.expandtabs(TAB))]
+        wide = line.expandtabs(TAB)
+        return [wide[a:b].strip() for a, b in zip(starts, starts[1:] + [None])]
+
+    @staticmethod
+    def widths(rows):
+        """Width of each column in characters: whole tabs of TAB
+        characters, at least one more than its longest cell."""
+        return [(max(len(c) for c in col) // TAB + 1) * TAB for col in zip(*rows)]
 
     def append(self, row):
         with self.path.open("a") as f:
             f.write("\t".join(str(x) for x in row) + "\n")
+
+    def align(self):
+        """Pads every cell but the last of each row with tabs so that the
+        columns line up. Header comment lines stay as they are."""
+        lines = self.path.read_text().splitlines()
+        comments = [line for line in lines if line.startswith("#")]
+        table = [line for line in lines if line and not line.startswith("#")]
+        if not table:
+            return
+        self.header = table[0]
+        columns = self.columns = re.split(r"\t+", self.header)
+        rows = [columns] + [r for r in map(self.split, table[1:])]
+        rows = [r + [""] * (len(columns) - len(r)) for r in rows]
+        widths = self.widths(rows)
+        out = ["".join(c + "\t" * ((w - len(c) - 1) // TAB + 1) for c, w in zip(r[:-1], widths)) + r[-1]
+               for r in rows]
+        self.path.write_text("\n".join(comments + out) + "\n")
 
 
 def benchmark(args, pairs, results, dim=None):
@@ -444,6 +489,7 @@ def benchmark(args, pairs, results, dim=None):
         stats = play_stats(r, args)
         print("  play: " + outcome(r, stats))
         results.append([a.name, b.name, *stat_fields(r, stats), r.seconds, *hera])
+    results.align()
     print(f"Done. Results: {results.path}")
     return 0
 
